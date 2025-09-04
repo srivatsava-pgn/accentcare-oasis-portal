@@ -1,0 +1,26 @@
+{
+  "compilerOptions": {
+    "noImplicitAny": false, // Allows implicit any types
+    "noImplicitReturns": false, // Allows functions without return statements
+    "noUnusedLocals": false, // Allows unused local variables
+    "noUnusedParameters": false, // Allows unused parameters
+    "strictNullChecks": false, // Allows null/undefined assignments
+    "strictFunctionTypes": false, // Less strict function type checking
+    "skipLibCheck": true, // Skip type checking of declaration files
+
+    // Keep these for basic functionality
+    "target": "es5",
+    "lib": ["dom", "dom.iterable", "es6"],
+    "allowJs": true,
+    "allowSyntheticDefaultImports": true,
+    "strict": false, // Disables all strict type-checking options
+    "forceConsistentCasingInFileNames": true,
+    "module": "esnext",
+    "moduleResolution": "node",
+    "resolveJsonModule": true,
+    "isolatedModules": true,
+    "noEmit": true,
+    "jsx": "react-jsx"
+  },
+  "include": ["src"]
+}

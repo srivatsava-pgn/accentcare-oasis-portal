@@ -1,26 +1,62 @@
 import { ChevronDown, LayoutDashboard, LogOut, User } from "lucide-react";
-import { useState } from "react";
+import { useState, useEffect } from "react";
+import { fetchOasisProjects } from "../services/api";
 import penguinLogo from "../assets/penguin-logo.svg";
 import penguinName from "../assets/Penguinai-name.png";
 import PDFViewerSection from "./PDFViewerSection";
 import ResultsSection from "./ResultsSection";
 
-const CodingInterface = ({ mrn, episodeId, onBack, handleLogout }) => {
-  const [boundingBoxes, setBoundingBoxes] = useState({});
+const CodingInterface = ({ episodeId, onBack, handleLogout }) => {
+  const [boundingBoxes, setBoundingBoxes] = useState(null);
   const [showUserMenu, setShowUserMenu] = useState(false);
+  const [episodeData, setEpisodeData] = useState(null);
+  const [highlightedDocumentName, setHighlightedDocumentName] = useState(null);
+  const [highlightedPageNumber, setHighlightedPageNumber] = useState(null);
+
+  // Fetch episode data for statistics
+  useEffect(() => {
+    const fetchEpisodeData = async () => {
+      try {
+        const data = await fetchOasisProjects(1, 100, 'ALL'); // Get all episodes
+        const episode = data.projects.find(p => p.episode_id === episodeId);
+        setEpisodeData(episode);
+      } catch (error) {
+        console.error('Error fetching episode data:', error);
+      }
+    };
+
+    if (episodeId) {
+      fetchEpisodeData();
+    }
+  }, [episodeId]);
 
   // Handle highlighting from results section
   const handleHighlight = (supportingInfo) => {
     if (supportingInfo.bbox && supportingInfo.bbox.length > 0) {
-      const highlightData = {
+      // Set the highlighted document and page for navigation
+      setHighlightedDocumentName(supportingInfo.document_name);
+      setHighlightedPageNumber(parseInt(supportingInfo.page_number));
+      
+      // Set the bounding box data for highlighting
+      // PDFViewer expects: [{document_name, page_number, bbox: [[x1,y1,x2,y2,x3,y3,x4,y4], ...]}]
+      // If supportingInfo.bbox is a single array of 8 coords, wrap it
+      // If it's already an array of arrays, use as is
+      let bboxArray;
+      if (Array.isArray(supportingInfo.bbox[0])) {
+        // Already an array of bbox arrays
+        bboxArray = supportingInfo.bbox;
+      } else {
+        // Single bbox array, wrap it
+        bboxArray = [supportingInfo.bbox];
+      }
+      
+      setBoundingBoxes([{
         document_name: supportingInfo.document_name,
         page_number: parseInt(supportingInfo.page_number),
-        bbox: supportingInfo.bbox, // Take the first bounding box
+        bbox: bboxArray,
         supporting_sentence: supportingInfo.supporting_sentence_in_document,
         section_name: supportingInfo.section_name,
-      };
-
-      setBoundingBoxes(highlightData); // Replace existing highlights with new one
+      }]);
     }
   };
 
@@ -36,7 +72,7 @@ const CodingInterface = ({ mrn, episodeId, onBack, handleLogout }) => {
               <img src={penguinName} alt="PenguinAI" className="h-6" />
             </div>
 
-            {/* MRN Info - Moved next to logo */}
+            {/* Episode ID Info - Moved next to logo */}
             <div className="bg-blue-100 px-3 py-1 rounded-lg">
               <div className="text-sm font-bold text-blue-800">
                 Episode Id: {episodeId}
@@ -146,16 +182,25 @@ const CodingInterface = ({ mrn, episodeId, onBack, handleLogout }) => {
         </div>
       </div>
 
-      {/* Split View Content */}
+      {/* Split View Content - 45/55 ratio */}
       <div className="flex h-[calc(100vh-80px)]">
-        {/* Left Side - PDF Viewer */}
-        <div className="w-1/2 border-r border-gray-300 bg-white">
-          <PDFViewerSection mrn={mrn} boundingBoxes={boundingBoxes} />
+        {/* Left Side - PDF Viewer (45%) */}
+        <div className="w-[45%] border-r border-gray-300 bg-white">
+          <PDFViewerSection 
+            episodeId={episodeId} 
+            boundingBoxes={boundingBoxes}
+            highlightedDocumentName={highlightedDocumentName}
+            highlightedPageNumber={highlightedPageNumber}
+          />
         </div>
 
-        {/* Right Side - Results */}
-        <div className="w-1/2 bg-gray-50">
-          <ResultsSection mrn={mrn} onHighlight={handleHighlight} />
+        {/* Right Side - Results (55%) */}
+        <div className="w-[55%] bg-gray-50">
+          <ResultsSection 
+            episodeId={episodeId} 
+            onHighlight={handleHighlight}
+            episodeData={episodeData}
+          />
         </div>
       </div>
     </div>

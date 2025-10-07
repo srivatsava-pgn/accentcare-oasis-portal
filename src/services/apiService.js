@@ -1,7 +1,7 @@
 import axios from "axios";
 
 const baseUrls = {
-  development: "https://dev-api.penguinai.co/accentcarecoding",
+  development: "https://dev-api.penguinai.co/accentcarecoding/oasis-scrubbing",
   production: "https://acc-icdbackend.penguinai.co",
 };
 export const API_BASE_URL =
@@ -50,6 +50,11 @@ API.interceptors.response.use(
     if (error.response && error.response.status === 401) {
       console.log("Authentication failed or expired, redirecting to login");
       logoutUser();
+    }
+
+    // Handle new error format with 'detail' field
+    if (error.response && error.response.data && error.response.data.detail) {
+      error.message = error.response.data.detail;
     }
 
     return Promise.reject(error);

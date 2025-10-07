@@ -1,545 +1,286 @@
+import React, { useEffect, useState } from 'react';
 import {
-  Activity,
   AlertCircle,
   CheckCircle,
-  ChevronDown,
-  ChevronRight,
-  Eye,
-  EyeOff,
+  Clock,
   FileText,
   RefreshCw,
-  Save,
   ThumbsDown,
   ThumbsUp,
   X,
-  XCircle,
-} from "lucide-react";
-import { useEffect, useMemo, useState } from "react";
+  MessageSquare,
+  ChevronRight,
+  ChevronDown,
+  Search,
+  Filter,
+  Eye,
+  Sparkles,
+} from 'lucide-react';
 import {
-  getOasisResultsByMrn,
-  submitGuidelineRejectionNote,
+  getOasisResultsByEpisodeId,
   updateGuidelineDecision,
-} from "../services/api";
-import { SearchAndFilter } from "./SearchAndFilter";
+  submitGuidelineRejectionNote,
+} from '../services/api';
+import type { OasisParentGuideline, OasisChildGuideline } from '../types';
 
-const ResultsSection = ({ mrn, onHighlight }) => {
-  const [results, setResults] = useState(null);
+interface ResultsSectionProps {
+  episodeId: string;
+  onHighlight?: (supportingInfo: any) => void;
+  episodeData?: any; // Episode data from dashboard API
+}
+
+const ResultsSection: React.FC<ResultsSectionProps> = ({ episodeId, onHighlight, episodeData }) => {
+  const [results, setResults] = useState<OasisParentGuideline[]>([]);
+  const [filteredResults, setFilteredResults] = useState<OasisParentGuideline[]>([]);
   const [loading, setLoading] = useState(true);
-  const [error, setError] = useState(null);
-  const [expandedGuidelines, setExpandedGuidelines] = useState(new Set());
-  const [expandedSubQuestions, setExpandedSubQuestions] = useState(new Set());
-  const [searchTerm, setSearchTerm] = useState("");
-  const [filterType, setFilterType] = useState("all");
-  const [subQuestionDecisions, setSubQuestionDecisions] = useState(new Map());
-  const [processingDecisions, setProcessingDecisions] = useState(new Set());
-  const [rejectingSubQuestion, setRejectingSubQuestion] = useState(null);
-  const [rejectForm, setRejectForm] = useState({
-    answer: "",
-    supportingEvidence: "",
-    additionalNotes: "",
-  });
+  const [error, setError] = useState<string | null>(null);
+  
+  // Search and filter state
+  const [searchTerm, setSearchTerm] = useState('');
+  const [currentFilter, setCurrentFilter] = useState('all');
+  const [showFilterDropdown, setShowFilterDropdown] = useState(false);
+  
+  // UI state
+  const [expandedGuidelines, setExpandedGuidelines] = useState<Set<string>>(new Set());
+  const [expandedSubQuestions, setExpandedSubQuestions] = useState<Set<string>>(new Set());
+  const [expandedSections, setExpandedSections] = useState<Set<string>>(new Set());
+  const [rejectionNotes, setRejectionNotes] = useState<Record<string, string>>({});
+  const [showRejectionModal, setShowRejectionModal] = useState<string | null>(null);
+  const [processingDecisions, setProcessingDecisions] = useState<Set<string>>(new Set());
 
-  // Save functionality state
-  const [isSaving, setIsSaving] = useState(false);
-  const [showSuccessMessage, setShowSuccessMessage] = useState(false);
-
-  // Fetch results function - extracted to be reusable
+  // Fetch OASIS results
   const fetchResults = async () => {
     try {
       setLoading(true);
       setError(null);
-
-      const data = await getOasisResultsByMrn(mrn);
-      setResults(data);
-
-      // Process existing user decisions and populate local state
-      if (data?.results) {
-        const existingDecisions = new Map();
-
-        data.results.forEach((guideline) => {
-          guideline.sub_questions.forEach((subQuestion, subIndex) => {
-            const decisionKey = `${mrn}-${subQuestion.guideline_id}-${subIndex}`;
-
-            // Check if there are existing user decisions
-            if (
-              subQuestion.user_decisions &&
-              Object.keys(subQuestion.user_decisions).length > 0
-            ) {
-              // Get the first (and likely only) user decision
-              const userKey = Object.keys(subQuestion.user_decisions)[0];
-              const decision = subQuestion.user_decisions[userKey];
-
-              existingDecisions.set(decisionKey, {
-                action: decision.status, // "accept" or "reject"
-                timestamp: decision.decided_at,
-                userAnswer: decision.rejection_details?.user_answer,
-                supportingEvidence:
-                  decision.rejection_details?.supporting_evidence,
-                additionalNotes: decision.rejection_details?.additional_notes,
-                submittedBy: decision.rejection_details?.submitted_by,
-              });
-            }
-          });
-        });
-
-        setSubQuestionDecisions(existingDecisions);
-      }
-    } catch (error) {
-      console.error("Error fetching results:", error);
-      setError(error.message);
+      
+      const data = await getOasisResultsByEpisodeId(episodeId);
+      setResults(data.results || []);
+      setFilteredResults(data.results || []);
+    } catch (err) {
+      console.error('Error fetching OASIS results:', err);
+      setError(err instanceof Error ? err.message : 'Failed to fetch results');
+      setResults([]);
+      setFilteredResults([]);
     } finally {
       setLoading(false);
     }
   };
 
-  // Refresh statistics after decision update
-  const refreshStatistics = async () => {
-    try {
-      const data = await getOasisResultsByMrn(mrn);
-      setResults(data);
-    } catch (error) {
-      console.error("Error refreshing statistics:", error);
-      // Don't show error to user for statistics refresh, just log it
-    }
-  };
-
+  // Initial data fetch
   useEffect(() => {
-    if (mrn) {
+    if (episodeId) {
       fetchResults();
     }
-  }, [mrn]);
+  }, [episodeId]);
 
-  const handleRetry = () => {
-    setError(null);
-    setLoading(false);
-  };
+  // Filter and search logic
+  useEffect(() => {
+    let filtered: OasisParentGuideline[] = [];
 
-  const toggleGuideline = (guidelineId) => {
-    const newExpanded = new Set(expandedGuidelines);
-    if (newExpanded.has(guidelineId)) {
-      newExpanded.delete(guidelineId);
-    } else {
-      newExpanded.add(guidelineId);
-    }
-    setExpandedGuidelines(newExpanded);
-  };
-
-  const toggleSubQuestion = (subQuestionId) => {
-    const newExpanded = new Set(expandedSubQuestions);
-    if (newExpanded.has(subQuestionId)) {
-      newExpanded.delete(subQuestionId);
-    } else {
-      newExpanded.add(subQuestionId);
-    }
-    setExpandedSubQuestions(newExpanded);
-  };
-
-  const handleSubQuestionDecision = async (
-    guidelineId,
-    subQuestionIndex,
-    action
-  ) => {
-    const decisionKey = `${mrn}-${guidelineId}-${subQuestionIndex}`;
-
-    if (action === "reject") {
-      setRejectingSubQuestion({ guidelineId, subQuestionIndex });
-      setRejectForm({
-        answer: "",
-        supportingEvidence: "",
-        additionalNotes: "",
-      });
-      return;
-    }
-
-    try {
-      setProcessingDecisions((prev) => new Set(prev).add(decisionKey));
-
-      await updateGuidelineDecision(mrn, guidelineId, action);
-
-      setSubQuestionDecisions((prev) => {
-        const newDecisions = new Map(prev);
-        if (action === "undo") {
-          newDecisions.delete(decisionKey);
-        } else {
-          newDecisions.set(decisionKey, {
-            action,
-            timestamp: new Date().toISOString(),
-          });
+    results.forEach(parentGuideline => {
+      let matchingSubQuestions: OasisChildGuideline[] = [];
+      
+      // Check if parent matches search
+      const parentMatches = !searchTerm.trim() || 
+        parentGuideline.guideline_id.toLowerCase().includes(searchTerm.toLowerCase()) ||
+        (parentGuideline.title && parentGuideline.title.toLowerCase().includes(searchTerm.toLowerCase()));
+      
+      // Filter sub-questions based on search and status filter
+      parentGuideline.sub_questions.forEach(subQuestion => {
+        const subQuestionMatches = !searchTerm.trim() || 
+          subQuestion.question.toLowerCase().includes(searchTerm.toLowerCase()) ||
+          subQuestion.guideline_id.toLowerCase().includes(searchTerm.toLowerCase());
+        
+        const statusMatches = currentFilter === 'all' || 
+          (currentFilter === 'ai-accepted' && subQuestion.ai_decision === 'accepted') ||
+          (currentFilter === 'ai-rejected' && subQuestion.ai_decision === 'rejected') ||
+          (currentFilter === 'user-accepted' && subQuestion.user_decision === 'accepted') ||
+          (currentFilter === 'user-rejected' && subQuestion.user_decision === 'rejected');
+        
+        if ((parentMatches || subQuestionMatches) && statusMatches) {
+          matchingSubQuestions.push(subQuestion);
         }
-        return newDecisions;
       });
-
-      // Refresh statistics after successful decision update
-      await refreshStatistics();
-    } catch (error) {
-      console.error(`Error ${action}ing sub-question:`, error);
-      setError(`Failed to ${action} sub-question: ${error.message}`);
-    } finally {
-      setProcessingDecisions((prev) => {
-        const newSet = new Set(prev);
-        newSet.delete(decisionKey);
-        return newSet;
-      });
-    }
-  };
-
-  const handleRejectSubmit = async () => {
-    if (!rejectingSubQuestion) return;
-
-    const { guidelineId, subQuestionIndex } = rejectingSubQuestion;
-    const decisionKey = `${mrn}-${guidelineId}-${subQuestionIndex}`;
-
-    try {
-      setProcessingDecisions((prev) => new Set(prev).add(decisionKey));
-
-      // Call both APIs in parallel
-      const [decisionResponse, rejectionResponse] = await Promise.all([
-        updateGuidelineDecision(mrn, guidelineId, "reject"),
-        submitGuidelineRejectionNote({
-          mrn,
-          guideline_id: guidelineId,
-          user_answer: rejectForm.answer,
-          supporting_evidence: rejectForm.supportingEvidence,
-          additional_notes: rejectForm.additionalNotes,
-        }),
-      ]);
-
-      setSubQuestionDecisions((prev) => {
-        const newDecisions = new Map(prev);
-        newDecisions.set(decisionKey, {
-          action: "reject",
-          timestamp: new Date().toISOString(),
-          userAnswer: rejectForm.answer,
-          supportingEvidence: rejectForm.supportingEvidence,
-          additionalNotes: rejectForm.additionalNotes,
+      
+      // Include parent if it has matching sub-questions
+      if (matchingSubQuestions.length > 0) {
+        filtered.push({
+          ...parentGuideline,
+          sub_questions: matchingSubQuestions
         });
-        return newDecisions;
-      });
+      }
+    });
 
-      setRejectingSubQuestion(null);
-      setRejectForm({
-        answer: "",
-        supportingEvidence: "",
-        additionalNotes: "",
-      });
+    setFilteredResults(filtered);
+  }, [results, searchTerm, currentFilter]);
 
-      // Refresh statistics after successful rejection
-      await refreshStatistics();
-    } catch (error) {
-      console.error("Error rejecting sub-question:", error);
-      setError(`Failed to reject sub-question: ${error.message}`);
+  // Handle guideline decision
+  const handleGuidelineDecision = async (guidelineId: string, action: 'accept' | 'reject' | 'undo') => {
+    try {
+      // Validate inputs
+      if (!episodeId || !guidelineId) {
+        console.error('Missing required parameters:', { episodeId, guidelineId });
+        setError('Missing episode or guideline ID');
+        return;
+      }
+      
+      setProcessingDecisions(prev => new Set(prev).add(guidelineId));
+      
+      console.log('Calling updateGuidelineDecision with:', { episodeId, guidelineId, action });
+      await updateGuidelineDecision(episodeId, guidelineId, action);
+      
+      // Refresh results to get updated data
+      await fetchResults();
+    } catch (err) {
+      console.error('Error updating guideline decision:', err);
+      // Show error but don't crash the UI
+      const errorMessage = err instanceof Error ? err.message : 'Failed to update decision';
+      setError(errorMessage);
+      
+      // Show alert to user for better visibility
+      alert(`Error: ${errorMessage}\n\nPlease check the console for more details.`);
     } finally {
-      setProcessingDecisions((prev) => {
+      setProcessingDecisions(prev => {
         const newSet = new Set(prev);
-        newSet.delete(decisionKey);
+        newSet.delete(guidelineId);
         return newSet;
       });
     }
   };
 
-  const handleRejectCancel = () => {
-    setRejectingSubQuestion(null);
-    setRejectForm({
-      answer: "",
-      supportingEvidence: "",
-      additionalNotes: "",
-    });
-  };
-
-  // Save all changes handler
-  const handleSaveAll = async () => {
+  // Handle rejection note submission
+  const handleRejectionNoteSubmit = async (guidelineId: string, note: string) => {
     try {
-      setIsSaving(true);
-      setShowSuccessMessage(false);
-
-      // Simulate API call to save all changes
-      // In a real implementation, you would call your save API here
-      await new Promise((resolve) => setTimeout(resolve, 2000));
-
-      setShowSuccessMessage(true);
-
-      // Hide success message after 3 seconds
-      setTimeout(() => {
-        setShowSuccessMessage(false);
-      }, 3000);
-    } catch (error) {
-      console.error("Error saving changes:", error);
-      setError("Failed to save changes");
-    } finally {
-      setIsSaving(false);
+      await submitGuidelineRejectionNote({
+        episode_id: episodeId,
+        guideline_id: guidelineId,
+        note: note.trim(),
+      });
+      
+      setShowRejectionModal(null);
+      setRejectionNotes(prev => ({ ...prev, [guidelineId]: '' }));
+      
+      // Refresh results to get updated data
+      await fetchResults();
+    } catch (err) {
+      console.error('Error submitting rejection note:', err);
+      setError(err instanceof Error ? err.message : 'Failed to submit rejection note');
     }
   };
 
-  const getSubQuestionDecision = (guidelineId, subQuestionIndex) => {
-    const decisionKey = `${mrn}-${guidelineId}-${subQuestionIndex}`;
-    return subQuestionDecisions.get(decisionKey);
-  };
-
-  const isProcessingSubQuestionDecision = (guidelineId, subQuestionIndex) => {
-    const decisionKey = `${mrn}-${guidelineId}-${subQuestionIndex}`;
-    return processingDecisions.has(decisionKey);
-  };
-
-  const getMatchIcon = (match) => {
-    if (match === "True" || match === true) {
-      return <CheckCircle className="w-4 h-4 text-green-600" />;
-    }
-    return <XCircle className="w-4 h-4 text-red-600" />;
-  };
-
-  const getMatchBadge = (match) => {
-    if (match === "True" || match === true) {
-      return (
-        <span className="inline-flex items-center gap-1 px-2 py-1 text-xs font-medium rounded-full bg-green-100 text-green-800">
-          <CheckCircle className="w-3 h-3" />
-          Match
-        </span>
-      );
-    }
-    return (
-      <span className="inline-flex items-center gap-1 px-2 py-1 text-xs font-medium rounded-full bg-red-100 text-red-800">
-        <XCircle className="w-3 h-3" />
-        No Match
-      </span>
-    );
-  };
-
-  const getSubQuestionDecisionBadge = (decision) => {
-    if (!decision) return null;
-
-    if (decision.action === "accept") {
-      return (
-        <span className="inline-flex items-center gap-1 px-2 py-1 text-xs font-medium rounded-full bg-blue-100 text-blue-800">
-          <ThumbsUp className="w-3 h-3" />
-          User Accepted
-        </span>
-      );
-    } else if (decision.action === "reject") {
-      return (
-        <span className="inline-flex items-center gap-1 px-2 py-1 text-xs font-medium rounded-full bg-orange-100 text-orange-800">
-          <ThumbsDown className="w-3 h-3" />
-          User Rejected
-        </span>
-      );
-    }
-    return null;
-  };
-
-  const formatAnswer = (answer) => {
-    if (Array.isArray(answer)) {
-      return answer.join(", ");
-    }
-    return answer || "N/A";
-  };
-
-  const handleHighlightClick = (supportingInfo) => {
-    if (onHighlight) {
-      onHighlight(supportingInfo);
+  // Handle save
+  const handleSave = async () => {
+    try {
+      // TODO: Implement save functionality
+      console.log('Saving episode:', episodeId);
+      // You can add actual save logic here when the API is ready
+    } catch (err) {
+      console.error('Error saving episode:', err);
+      setError(err instanceof Error ? err.message : 'Failed to save episode');
     }
   };
 
-  const handleSearchChange = (term) => {
-    setSearchTerm(term);
-  };
-
-  const handleFilterChange = (filter) => {
-    setFilterType(filter);
-  };
-
-  const getGuidelineMatchRatio = (subQuestions) => {
-    const totalQuestions = subQuestions.length;
-    const matchedQuestions = subQuestions.filter(
-      (sq) => sq.match_with_coder === "True" || sq.match_with_coder === true
-    ).length;
-    return `${matchedQuestions}/${totalQuestions}`;
-  };
-
-  // Updated function to return match status instead of boolean
-  const getGuidelineMatchStatus = (subQuestions) => {
-    const totalQuestions = subQuestions.length;
-    const matchedQuestions = subQuestions.filter(
-      (sq) => sq.match_with_coder === "True" || sq.match_with_coder === true
-    ).length;
-
-    if (matchedQuestions === totalQuestions) {
-      return "full"; // All match
-    } else if (matchedQuestions === 0) {
-      return "none"; // No match
-    } else {
-      return "partial"; // Some match
-    }
-  };
-
-  // New function to get user decision status for a guideline
-  const getUserDecisionStatus = (guideline) => {
-    const totalSubQuestions = guideline.sub_questions.length;
-    const decisions = guideline.sub_questions.map((subQuestion, subIndex) => {
-      const decision = getSubQuestionDecision(
-        subQuestion.guideline_id,
-        subIndex
-      );
-      return decision?.action;
-    });
-
-    // Count decisions
-    const acceptedCount = decisions.filter((d) => d === "accept").length;
-    const rejectedCount = decisions.filter((d) => d === "reject").length;
-    const decidedCount = acceptedCount + rejectedCount;
-
-    // No decisions made at all
-    if (decidedCount === 0) {
-      return "none";
-    }
-
-    // All sub-questions have been decided
-    if (decidedCount === totalSubQuestions) {
-      if (rejectedCount === 0) {
-        return "accepted"; // All accepted
-      } else if (acceptedCount === 0) {
-        return "rejected"; // All rejected
+  // Toggle guideline expansion
+  const toggleGuideline = (guidelineId: string) => {
+    setExpandedGuidelines(prev => {
+      const newSet = new Set(prev);
+      if (newSet.has(guidelineId)) {
+        newSet.delete(guidelineId);
       } else {
-        return "partial"; // Mix of accept and reject
+        newSet.add(guidelineId);
       }
-    }
-
-    // Not all sub-questions have been decided (partial completion)
-    return "partial";
-  };
-
-  // Helper function to get match icon with appropriate color
-  const getGuidelineMatchIcon = (subQuestions) => {
-    const status = getGuidelineMatchStatus(subQuestions);
-
-    switch (status) {
-      case "full":
-        return <CheckCircle className="w-5 h-5 text-green-600" />;
-      case "none":
-        return <XCircle className="w-5 h-5 text-red-600" />;
-      case "partial":
-        return <CheckCircle className="w-5 h-5 text-yellow-600" />;
-      default:
-        return <XCircle className="w-5 h-5 text-red-600" />;
-    }
-  };
-
-  // Helper function to get user decision icon with appropriate color
-  const getUserDecisionIcon = (guideline) => {
-    const status = getUserDecisionStatus(guideline);
-
-    switch (status) {
-      case "accepted":
-        return <ThumbsUp className="w-4 h-4 text-green-600" />;
-      case "rejected":
-        return <ThumbsDown className="w-4 h-4 text-red-600" />;
-      case "partial":
-        return <ThumbsUp className="w-4 h-4 text-yellow-600" />;
-      default:
-        return null; // No icon when no decisions made
-    }
-  };
-
-  // Helper functions for user decision filtering
-  const hasUserAcceptedSubQuestions = (guideline) => {
-    return guideline.sub_questions.some((subQuestion, subIndex) => {
-      const decision = getSubQuestionDecision(
-        subQuestion.guideline_id,
-        subIndex
-      );
-      return decision && decision.action === "accept";
+      return newSet;
     });
   };
 
-  const hasUserRejectedSubQuestions = (guideline) => {
-    return guideline.sub_questions.some((subQuestion, subIndex) => {
-      const decision = getSubQuestionDecision(
-        subQuestion.guideline_id,
-        subIndex
-      );
-      return decision && decision.action === "reject";
+  // Toggle sub-question expansion
+  const toggleSubQuestion = (subQuestionId: string) => {
+    setExpandedSubQuestions(prev => {
+      const newSet = new Set(prev);
+      if (newSet.has(subQuestionId)) {
+        newSet.delete(subQuestionId);
+      } else {
+        newSet.add(subQuestionId);
+      }
+      return newSet;
     });
   };
 
-  // Filter and search logic - updated to use new status functions
-  const filteredGuidelines = useMemo(() => {
-    const guidelines = results?.results || [];
+  const toggleSection = (sectionId: string) => {
+    setExpandedSections(prev => {
+      const newSet = new Set(prev);
+      if (newSet.has(sectionId)) {
+        newSet.delete(sectionId);
+      } else {
+        newSet.add(sectionId);
+      }
+      return newSet;
+    });
+  };
 
-    let filtered = guidelines;
-
-    // Apply filter - updated filter values to match new labels
-    if (filterType === "ai-accepted") {
-      filtered = filtered.filter(
-        (guideline) =>
-          getGuidelineMatchStatus(guideline.sub_questions) === "full"
-      );
-    } else if (filterType === "ai-rejected") {
-      filtered = filtered.filter(
-        (guideline) =>
-          getGuidelineMatchStatus(guideline.sub_questions) === "none"
-      );
-    } else if (filterType === "user-accepted") {
-      filtered = filtered.filter((guideline) =>
-        hasUserAcceptedSubQuestions(guideline)
-      );
-    } else if (filterType === "user-rejected") {
-      filtered = filtered.filter((guideline) =>
-        hasUserRejectedSubQuestions(guideline)
-      );
+  // Calculate overall statistics
+  const getStatsFromEpisodeData = () => {
+    if (!episodeData) {
+      return {
+        totalQuestions: 0,
+        aiAccepted: 0,
+        aiPartiallyAccepted: 0,
+        aiRejected: 0,
+        userAccepted: 0,
+        userPartiallyAccepted: 0,
+        userRejected: 0,
+        accuracy: '0.0',
+        totalGuidelines: results.length
+      };
     }
-
-    // Apply search
-    if (searchTerm.trim()) {
-      const searchLower = searchTerm.toLowerCase();
-      filtered = filtered.filter(
-        (guideline) =>
-          guideline.guideline_id.toLowerCase().includes(searchLower) ||
-          guideline.sub_questions.some(
-            (sq) =>
-              sq.guideline_id.toLowerCase().includes(searchLower) ||
-              sq.question?.toLowerCase().includes(searchLower) ||
-              sq.reasoning?.toLowerCase().includes(searchLower)
-          )
-      );
-    }
-
-    return filtered;
-  }, [results?.results, filterType, searchTerm, subQuestionDecisions]);
-
-  // Calculate stats for filter component - updated to use new filter values
-  const resultStats = useMemo(() => {
-    const guidelines = results?.results || [];
-    const aiAccepted = guidelines.filter(
-      (guideline) => getGuidelineMatchStatus(guideline.sub_questions) === "full"
-    ).length;
-    const aiRejected = guidelines.filter(
-      (guideline) => getGuidelineMatchStatus(guideline.sub_questions) === "none"
-    ).length;
-    const userAccepted = guidelines.filter((guideline) =>
-      hasUserAcceptedSubQuestions(guideline)
-    ).length;
-    const userRejected = guidelines.filter((guideline) =>
-      hasUserRejectedSubQuestions(guideline)
-    ).length;
 
     return {
-      total: guidelines.length,
-      aiAccepted,
-      aiRejected,
-      userAccepted,
-      userRejected,
+      totalQuestions: episodeData.guidelines_total || 0,
+      aiAccepted: episodeData.ai_accepted || 0,
+      aiPartiallyAccepted: episodeData.ai_partially_accepted || 0,
+      aiRejected: episodeData.ai_rejected || 0,
+      userAccepted: episodeData.user_accepted || 0,
+      userPartiallyAccepted: episodeData.user_partially_accepted_rejected || 0,
+      userRejected: episodeData.user_rejected || 0,
+      accuracy: episodeData.accuracy ? episodeData.accuracy.toString() : '0.0',
+      totalGuidelines: results.length
     };
-  }, [results?.results, subQuestionDecisions]);
+  };
+
+  // Calculate status for a parent guideline
+  const calculateParentStatus = (parent: OasisParentGuideline) => {
+    const totalQuestions = parent.sub_questions.length;
+    const acceptedQuestions = parent.sub_questions.filter(sub => sub.ai_decision === 'accepted').length;
+    const rejectedQuestions = parent.sub_questions.filter(sub => sub.ai_decision === 'rejected').length;
+
+    if (acceptedQuestions === totalQuestions) {
+      return { icon: CheckCircle, color: 'text-green-600', count: `${acceptedQuestions}/${totalQuestions}` };
+    } else if (acceptedQuestions === 0) {
+      return { icon: X, color: 'text-red-600', count: `${acceptedQuestions}/${totalQuestions}` };
+    } else {
+      return { icon: CheckCircle, color: 'text-orange-600', count: `${acceptedQuestions}/${totalQuestions}` };
+    }
+  };
+
+  // Filter options
+  const filterOptions = [
+    { value: 'all', label: 'All Guidelines' },
+    { value: 'ai-accepted', label: 'AI Accepted' },
+    { value: 'ai-rejected', label: 'AI Rejected' },
+    { value: 'user-accepted', label: 'User Accepted' },
+    { value: 'user-rejected', label: 'User Rejected' },
+  ];
+
+  const currentFilterLabel = filterOptions.find(opt => opt.value === currentFilter)?.label || 'All Guidelines';
 
   if (loading) {
     return (
-      <div className="h-full flex items-center justify-center">
+      <div className="h-full flex items-center justify-center bg-gray-50">
         <div className="text-center">
           <RefreshCw className="w-8 h-8 animate-spin mx-auto mb-4 text-blue-600" />
-          <p className="text-lg font-semibold text-gray-700">
-            Loading Results...
-          </p>
-          <p className="text-sm text-gray-500 mt-2">
-            Fetching OASIS results for MRN: {mrn}
-          </p>
+          <p className="text-lg font-semibold text-gray-700">Loading OASIS Results...</p>
+          <p className="text-sm text-gray-500 mt-2">Fetching guidelines for Episode ID: {episodeId}</p>
         </div>
       </div>
     );
@@ -547,15 +288,13 @@ const ResultsSection = ({ mrn, onHighlight }) => {
 
   if (error) {
     return (
-      <div className="h-full flex items-center justify-center">
+      <div className="h-full flex items-center justify-center bg-gray-50">
         <div className="text-center">
           <AlertCircle className="w-12 h-12 text-red-500 mx-auto mb-4" />
-          <p className="text-lg font-semibold text-gray-700 mb-2">
-            Error Loading Results
-          </p>
+          <p className="text-lg font-semibold text-gray-700 mb-2">Error Loading Results</p>
           <p className="text-sm text-gray-500 mb-4">{error}</p>
           <button
-            onClick={handleRetry}
+            onClick={fetchResults}
             className="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors"
           >
             Retry
@@ -565,742 +304,698 @@ const ResultsSection = ({ mrn, onHighlight }) => {
     );
   }
 
-  const guidelines = results?.results || [];
-  const statistics = results?.statistics || {};
+  const stats = getStatsFromEpisodeData();
 
   return (
-    <div className="h-full flex flex-col">
-      {/* Statistics Legend */}
-      <div className="bg-white border-b border-gray-200 px-4 py-3">
-        <div className="flex items-center justify-between mb-3">
-          <h3 className="text-lg font-semibold text-gray-900">
-            OASIS Guidelines
-          </h3>
-          <div className="flex items-center gap-4 text-sm text-gray-500">
-            <span className="flex items-center font-bold gap-1">
-              Accuracy: {statistics.accuracy}
-            </span>
-            <span className="flex items-center gap-1">
-              <CheckCircle className="w-4 h-4 text-green-600" />
-              {statistics.matched_guidelines || 0}
-            </span>
-            <span className="flex items-center gap-1">
-              <XCircle className="w-4 h-4 text-red-600" />
-              {(statistics.total_guidelines || 0) -
-                (statistics.matched_guidelines || 0)}
-            </span>
-            <span>
-              {filteredGuidelines.length} of {guidelines.length} guidelines
-            </span>
+    <div className="h-full flex flex-col bg-gray-50">
+      {/* Header */}
+      <div className="bg-white border-b border-gray-200 p-6">
+        {/* Title and Overall Stats */}
+        <div className="flex items-center justify-between mb-6">
+          <h2 className="text-2xl font-bold text-gray-900">OASIS Guidelines</h2>
+          
+          <div className="flex items-center gap-6">
+            <div className="text-right">
+              <div className="text-sm text-gray-600">Accuracy: {stats.accuracy}%</div>
+              <div className="flex items-center gap-2 text-sm">
+                <CheckCircle className="w-4 h-4 text-green-600" />
+                <span>{stats.aiAccepted}</span>
+                <Clock className="w-4 h-4 text-yellow-600" />
+                <span>{stats.aiPartiallyAccepted}</span>
+                <X className="w-4 h-4 text-red-600" />
+                <span>{stats.aiRejected}</span>
+                <span className="text-gray-500">{stats.totalGuidelines} of {stats.totalGuidelines} guidelines</span>
+              </div>
+            </div>
+            
+            {/* Episode Status and Lock Button */}
+            <button
+              onClick={handleSave}
+              className="flex items-center gap-2 px-6 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors font-medium"
+            >
+              Save
+            </button>
           </div>
         </div>
 
-        {/* Statistics with Legend Colors */}
-        <div className="flex items-center gap-6 mb-3">
+        {/* Statistics Grid */}
+        <div className="grid grid-cols-4 gap-8 mb-6">
+          {/* Row 1 - Column 1: Guidelines Total */}
           <div className="flex items-center gap-2">
-            <span className="w-3 h-3 bg-blue-500 rounded-full"></span>
-            <span className="text-sm text-gray-600">
-              Questions Processed: {statistics.questions_processed || 0}
-            </span>
+            <div className="w-3 h-3 bg-blue-500 rounded-full"></div>
+            <span className="text-sm font-medium text-gray-700">Guidelines Total: {stats.totalGuidelines}</span>
           </div>
+          
+          {/* Row 1 - Column 2: AI Accepted */}
           <div className="flex items-center gap-2">
             <CheckCircle className="w-4 h-4 text-green-600" />
-            <span className="text-sm text-gray-600">
-              AI Accepted: {statistics.ai_accepted || 0}
-            </span>
+            <span className="text-sm font-medium text-gray-700">AI Accepted: {stats.aiAccepted}</span>
           </div>
+          
+          {/* Row 1 - Column 3: AI Partially Accepted */}
           <div className="flex items-center gap-2">
-            <CheckCircle className="w-4 h-4 text-yellow-600" />
-            <span className="text-sm text-gray-600">
-              AI Partially Accepted: {statistics.ai_partially_accepted || 0}
-            </span>
+            <Clock className="w-4 h-4 text-orange-600" />
+            <span className="text-sm font-medium text-gray-700">AI Partially Accepted: {stats.aiPartiallyAccepted}</span>
           </div>
+          
+          {/* Row 1 - Column 4: AI Rejected */}
           <div className="flex items-center gap-2">
-            <XCircle className="w-4 h-4 text-red-600" />
-            <span className="text-sm text-gray-600">
-              AI Rejected: {statistics.ai_rejected || 0}
-            </span>
+            <X className="w-4 h-4 text-red-600" />
+            <span className="text-sm font-medium text-gray-700">AI Rejected: {stats.aiRejected}</span>
           </div>
-        </div>
-
-        <div className="flex items-center gap-6 mb-3">
+          
+          {/* Row 2 - Column 1: User Accepted */}
           <div className="flex items-center gap-2">
-            {/* <span className="w-3 h-3 bg-green-500 rounded-full"></span> */}
             <ThumbsUp className="w-4 h-4 text-green-600" />
-            <span className="text-sm text-gray-600">
-              User Accepted: {statistics.user_accepted || 0}
-            </span>
+            <span className="text-sm font-medium text-gray-700">User Accepted: {stats.userAccepted}</span>
           </div>
+          
+          {/* Row 2 - Column 2: User Partially Accepted */}
           <div className="flex items-center gap-2">
-            <ThumbsUp className="w-4 h-4 text-yellow-600" />
-            <span className="text-sm text-gray-600">
-              User Partially Accepted:
-              {statistics.user_partially_accepted_rejected || 0}
-            </span>
+            <Clock className="w-4 h-4 text-orange-600" />
+            <span className="text-sm font-medium text-gray-700">User Partially Accepted: {stats.userPartiallyAccepted}</span>
           </div>
+          
+          {/* Row 2 - Column 3: User Rejected */}
           <div className="flex items-center gap-2">
             <ThumbsDown className="w-4 h-4 text-red-600" />
-            <span className="text-sm text-gray-600">
-              User Rejected: {statistics.user_rejected || 0}
-            </span>
+            <span className="text-sm font-medium text-gray-700">User Rejected: {stats.userRejected}</span>
           </div>
+          
+          {/* Row 2 - Column 4: Empty */}
+          <div></div>
         </div>
 
         {/* Search and Filter */}
-        <SearchAndFilter
-          onSearchChange={handleSearchChange}
-          onFilterChange={handleFilterChange}
-          currentFilter={filterType}
-          resultStats={resultStats}
-        />
+        <div className="flex items-center gap-3">
+          {/* Search Input */}
+          <div className="flex-1 relative">
+            <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 w-4 h-4 text-gray-400" />
+            <input
+              type="text"
+              placeholder="Search guidelines or questions..."
+              value={searchTerm}
+              onChange={(e) => setSearchTerm(e.target.value)}
+              className="w-full pl-10 pr-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none transition-colors"
+            />
+          </div>
+
+          {/* Filter Dropdown */}
+          <div className="relative">
+            <button
+              onClick={() => setShowFilterDropdown(!showFilterDropdown)}
+              className="flex items-center gap-2 px-4 py-2 border border-gray-300 rounded-lg hover:bg-gray-50 focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none transition-colors bg-white"
+            >
+              <Filter className="w-4 h-4 text-gray-500" />
+              <span className="text-sm font-medium text-gray-700">{currentFilterLabel}</span>
+              <ChevronRight className={`w-4 h-4 text-gray-500 transform transition-transform ${showFilterDropdown ? 'rotate-90' : ''}`} />
+            </button>
+
+            {showFilterDropdown && (
+              <>
+                <div
+                  className="fixed inset-0 z-10"
+                  onClick={() => setShowFilterDropdown(false)}
+                />
+                <div className="absolute right-0 mt-2 w-48 bg-white border border-gray-200 rounded-lg shadow-lg z-20">
+                  <div className="py-1">
+                    {filterOptions.map((option) => (
+                      <button
+                        key={option.value}
+                        onClick={() => {
+                          setCurrentFilter(option.value);
+                          setShowFilterDropdown(false);
+                        }}
+                        className={`w-full px-4 py-2 text-left text-sm hover:bg-gray-50 transition-colors ${
+                          currentFilter === option.value
+                            ? 'bg-blue-50 text-blue-700'
+                            : 'text-gray-700'
+                        }`}
+                      >
+                        {option.label}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              </>
+            )}
+          </div>
+        </div>
       </div>
 
       {/* Results Content */}
-      <div className="flex-1 overflow-y-auto p-4">
-        {filteredGuidelines.length > 0 ? (
-          <div className="space-y-4">
-            {filteredGuidelines.map((guideline, index) => {
-              const isGuidelineExpanded = expandedGuidelines.has(
-                guideline.guideline_id
-              );
-              const matchRatio = getGuidelineMatchRatio(
-                guideline.sub_questions
-              );
-
+      <div className="flex-1 overflow-auto p-6">
+        {filteredResults.length === 0 ? (
+          <div className="text-center py-12">
+            <FileText className="w-12 h-12 text-gray-400 mx-auto mb-4" />
+            <p className="text-lg font-medium text-gray-500">
+              {results.length === 0 ? 'No guidelines found' : 'No guidelines match your filters'}
+            </p>
+            <p className="text-sm text-gray-400">
+              {results.length === 0 
+                ? `No OASIS guidelines available for Episode ${episodeId}`
+                : 'Try adjusting your search or filter criteria'
+              }
+            </p>
+          </div>
+        ) : (
+          <div className="space-y-3">
+            {filteredResults.map((parentGuideline) => {
+              const status = calculateParentStatus(parentGuideline);
+              const StatusIcon = status.icon;
+              
               return (
                 <div
-                  key={guideline.guideline_id}
-                  className="bg-white rounded-lg shadow border hover:shadow-md transition-shadow"
+                  key={parentGuideline.guideline_id}
+                  className="bg-white border border-gray-200 rounded-lg shadow-sm hover:shadow-md transition-shadow"
                 >
-                  {/* Guideline Header */}
+                  {/* Parent Guideline Header */}
                   <div
-                    className="flex items-center justify-between p-4 cursor-pointer hover:bg-gray-50"
-                    onClick={() => toggleGuideline(guideline.guideline_id)}
+                    className="p-4 cursor-pointer hover:bg-gray-50 transition-colors flex items-center justify-between"
+                    onClick={() => toggleGuideline(parentGuideline.guideline_id)}
                   >
                     <div className="flex items-center gap-3">
-                      {isGuidelineExpanded ? (
-                        <ChevronDown className="w-5 h-5 text-gray-400" />
-                      ) : (
-                        <ChevronRight className="w-5 h-5 text-gray-400" />
-                      )}
-
-                      <h4 className="text-lg font-semibold text-gray-900">
-                        {guideline.guideline_id}
-                      </h4>
-
-                      <span className="text-sm text-gray-500">
-                        {guideline.sub_questions.length} question
-                        {guideline.sub_questions.length !== 1 ? "s" : ""}
-                      </span>
-                      {guideline.title && (
-                        <span className="text-xs italic text-gray-600">
-                          {guideline.title}
+                      <ChevronRight 
+                        className={`w-5 h-5 text-gray-400 transform transition-transform ${
+                          expandedGuidelines.has(parentGuideline.guideline_id) ? 'rotate-90' : ''
+                        }`} 
+                      />
+                      
+                      <div className="flex items-center gap-3">
+                        <span className="text-lg font-bold text-gray-900">
+                          {parentGuideline.guideline_id}
                         </span>
-                      )}
+                        
+                        <span className="text-sm text-gray-600">
+                          {parentGuideline.sub_questions.length} question{parentGuideline.sub_questions.length !== 1 ? 's' : ''}
+                        </span>
+                        
+                        {parentGuideline.title && (
+                          <span className="text-sm italic text-gray-500">
+                            {parentGuideline.title}
+                          </span>
+                        )}
+                      </div>
                     </div>
-                    <div className="flex items-center gap-3">
-                      {/* Updated Match Icon with new color logic */}
-                      {getGuidelineMatchIcon(guideline.sub_questions)}
-                      <span className="text-sm font-medium text-gray-700">
-                        {matchRatio}
+                    
+                    <div className="flex items-center gap-2">
+                      <StatusIcon className={`w-5 h-5 ${status.color}`} />
+                      <span className={`text-sm font-medium ${status.color}`}>
+                        {status.count}
                       </span>
-
-                      {/* Updated User Decision Icon with new color logic */}
-                      {getUserDecisionIcon(guideline)}
                     </div>
                   </div>
 
-                  {/* Sub Questions */}
-                  {isGuidelineExpanded && (
-                    <div className="border-t border-gray-200">
-                      {guideline.sub_questions.map((subQuestion, subIndex) => {
-                        const subQuestionId = `${subQuestion.guideline_id}-${subIndex}`;
-                        const isSubQuestionExpanded =
-                          expandedSubQuestions.has(subQuestionId);
-                        const subQuestionDecision = getSubQuestionDecision(
-                          subQuestion.guideline_id,
-                          subIndex
-                        );
-                        const isProcessingSubQuestion =
-                          isProcessingSubQuestionDecision(
-                            subQuestion.guideline_id,
-                            subIndex
-                          );
-
-                        return (
+                  {/* Sub-Questions - Level 1 Expansion with Indentation */}
+                  {expandedGuidelines.has(parentGuideline.guideline_id) && (
+                    <div className="ml-6 border-l-4 border-blue-200 pl-4 bg-gray-50">
+                      {parentGuideline.sub_questions.map((subQuestion, index) => (
+                        <React.Fragment key={subQuestion.guideline_id}>
+                          {/* Sub-question Header - Clickable */}
                           <div
-                            key={subQuestionId}
-                            className="border-b border-gray-100 last:border-b-0"
+                            className="flex items-center justify-between py-3 px-4 cursor-pointer hover:bg-gray-100 transition-colors border-b border-gray-200"
+                            onClick={() => toggleSubQuestion(subQuestion.guideline_id)}
                           >
-                            {/* Sub Question Header */}
-                            <div
-                              className="flex items-center justify-between p-4 cursor-pointer hover:bg-gray-50"
-                              onClick={() => toggleSubQuestion(subQuestionId)}
-                            >
-                              <div className="flex items-center gap-3">
-                                <span className="text-sm font-medium text-gray-600">
-                                  {subQuestion.guideline_id}
-                                </span>
-                                <span className="text-sm text-gray-500">
-                                  #{subIndex + 1}
-                                </span>
-                                {getMatchBadge(subQuestion.match_with_coder)}
-                                {getSubQuestionDecisionBadge(
-                                  subQuestionDecision
-                                )}
-                              </div>
-                              <button className="flex items-center gap-1 px-3 py-1 text-sm text-gray-600 hover:text-gray-900 hover:bg-gray-100 rounded-md transition-colors">
-                                {isSubQuestionExpanded ? (
-                                  <>
-                                    <EyeOff className="w-4 h-4" />
-                                    Collapse
-                                  </>
+                            {/* Left side - Sub-question info */}
+                            <div className="flex items-center gap-4">
+                              <span className="text-lg font-bold text-gray-700">
+                                {subQuestion.guideline_id}
+                              </span>
+                              <span className="text-sm text-gray-500">
+                                #{index + 1}
+                              </span>
+                              
+                              {/* Status Badge */}
+                              <div className={`flex items-center gap-1 px-3 py-1 rounded-full ${
+                                subQuestion.ai_decision === 'accepted' 
+                                  ? 'bg-green-100 text-green-800' 
+                                  : 'bg-red-100 text-red-800'
+                              }`}>
+                                {subQuestion.ai_decision === 'accepted' ? (
+                                  <CheckCircle className="w-4 h-4" />
                                 ) : (
-                                  <>
-                                    <Eye className="w-4 h-4" />
-                                    Details
-                                  </>
+                                  <X className="w-4 h-4" />
                                 )}
-                              </button>
+                                <span className="text-sm font-medium">
+                                  {subQuestion.ai_decision === 'accepted' ? 'Match' : 'No Match'}
+                                </span>
+                              </div>
                             </div>
 
-                            {/* Sub Question Details */}
-                            {isSubQuestionExpanded && (
-                              <div className="px-4 pb-4 space-y-4">
-                                {/* Question */}
+                            {/* Right side - Collapse button */}
+                            <button className="flex items-center gap-2 px-4 py-2 text-gray-600 hover:text-gray-800 rounded-lg transition-colors">
+                              <span className="text-sm font-medium">
+                                {expandedSubQuestions.has(subQuestion.guideline_id) ? 'Collapse' : 'Details'}
+                              </span>
+                              <ChevronRight 
+                                className={`w-4 h-4 transform transition-transform ${
+                                  expandedSubQuestions.has(subQuestion.guideline_id) ? 'rotate-90' : ''
+                                }`} 
+                              />
+                            </button>
+                          </div>
+
+                          {/* Expanded Sub-Question Details - Inline with Indentation */}
+                          {expandedSubQuestions.has(subQuestion.guideline_id) && (
+                            <div className="ml-8 border-l-4 border-gray-300 pl-6 bg-white p-6 mr-4 mb-4 rounded-r-lg">
+                              {/* Question */}
+                              <div className="mb-6">
+                                <p className="text-base text-gray-800 font-medium leading-relaxed">
+                                  {subQuestion.question}
+                                </p>
+                              </div>
+
+                              {/* AI Prediction and Human Coder Answers - MOVED TO TOP */}
+                              <div className="grid grid-cols-2 gap-6 mb-6">
+                                {/* AI Prediction */}
                                 <div>
-                                  <h5 className="text-base font-medium text-gray-900 mb-3">
-                                    {subQuestion.question}
-                                  </h5>
-                                </div>
-                                {/* Available Options */}
-                                <div>
-                                  <h6 className="text-sm font-medium text-gray-700 mb-2">
-                                    Available Options:
-                                  </h6>
-                                  <div className="bg-gray-50 rounded p-3 space-y-1">
-                                    {subQuestion.option_descriptions?.map(
-                                      (option, idx) => (
-                                        <div
-                                          key={idx}
-                                          className="text-sm text-gray-700"
-                                        >
-                                          <span className="font-medium">
-                                            {option.option}:
-                                          </span>{" "}
-                                          {option.description}
-                                        </div>
-                                      )
+                                  <div className="flex items-center gap-2 mb-3">
+                                    <div className="w-6 h-6 bg-blue-100 rounded-full flex items-center justify-center">
+                                      <span className="text-blue-600 text-xs font-bold">AI</span>
+                                    </div>
+                                    <h4 className="text-sm font-semibold text-gray-700">AI Prediction</h4>
+                                  </div>
+                                  <div className="bg-blue-50 border border-blue-200 rounded-lg p-4">
+                                    {subQuestion.predicted_answer ? (
+                                      <div className="text-2xl font-bold text-blue-800">
+                                        {Array.isArray(subQuestion.predicted_answer) 
+                                          ? subQuestion.predicted_answer.join(', ')
+                                          : subQuestion.predicted_answer}
+                                      </div>
+                                    ) : (
+                                      <div className="text-sm text-gray-500">No prediction available</div>
                                     )}
                                   </div>
                                 </div>
-                                {/* Special Instructions */}
-                                {subQuestion.instructions
-                                  ?.special_instructions && (
-                                  <div className="bg-amber-50 border border-amber-200 rounded p-3">
-                                    <h6 className="text-sm font-medium text-amber-800 mb-1">
-                                      Special Instructions:
-                                    </h6>
-                                    <p className="text-sm text-amber-700">
-                                      {
-                                        subQuestion.instructions
-                                          .special_instructions
-                                      }
-                                    </p>
-                                  </div>
-                                )}
-                                {subQuestion.instructions
-                                  ?.coding_instructions && (
-                                  <div className="bg-amber-50 border border-amber-200 rounded p-3">
-                                    <h6 className="text-sm font-medium text-amber-800 mb-1">
-                                      Coding Instructions:
-                                    </h6>
-                                    <p className="text-sm text-amber-700">
-                                      {
-                                        subQuestion.instructions
-                                          .coding_instructions
-                                      }
-                                    </p>
-                                  </div>
-                                )}
-                                {subQuestion.instructions
-                                  ?.response_specific_instructions && (
-                                  <div className="bg-amber-50 border border-amber-200 rounded p-3">
-                                    <h6 className="text-sm font-medium text-amber-800 mb-1">
-                                      Response Specific Instructions
-                                    </h6>
-                                    <p className="text-sm text-amber-700">
-                                      {
-                                        subQuestion.instructions
-                                          .response_specific_instructions
-                                      }
-                                    </p>
-                                  </div>
-                                )}
-                                <div className="grid grid-cols-2 gap-3">
-                                  <div>
-                                    <div className="flex items-center gap-2 mb-2">
-                                      <div className="w-4 h-4 rounded-full bg-blue-500 flex items-center justify-center">
-                                        <span className="text-white text-xs font-bold">
-                                          i
-                                        </span>
-                                      </div>
-                                      <span className="text-sm font-medium text-gray-700">
-                                        AI Prediction
-                                      </span>
-                                    </div>
-                                    <div className="p-3 rounded border bg-blue-50 border-blue-200">
-                                      <span className="font-medium">
-                                        {formatAnswer(
-                                          subQuestion.predicted_answer
-                                        )}
-                                      </span>
-                                    </div>
-                                  </div>
 
-                                  <div>
-                                    <div className="flex items-center gap-2 mb-2">
-                                      <div className="w-4 h-4 rounded-full bg-purple-500 flex items-center justify-center">
-                                        <Eye className="w-2.5 h-2.5 text-white" />
+                                {/* Human Coder */}
+                                <div>
+                                  <div className="flex items-center gap-2 mb-3">
+                                    <div className="w-6 h-6 bg-purple-100 rounded-full flex items-center justify-center">
+                                      <span className="text-purple-600 text-xs font-bold">HC</span>
+                                    </div>
+                                    <h4 className="text-sm font-semibold text-gray-700">Human Coder</h4>
+                                  </div>
+                                  <div className="bg-purple-50 border border-purple-200 rounded-lg p-4">
+                                    {subQuestion.human_coder_answer && subQuestion.human_coder_answer.length > 0 ? (
+                                      <div className="text-2xl font-bold text-purple-800">
+                                        {subQuestion.human_coder_answer.join(', ')}
                                       </div>
-                                      <span className="text-sm font-medium text-gray-700">
-                                        Human Coder
-                                      </span>
-                                    </div>
-                                    <div className="bg-purple-50 p-3 rounded border border-purple-200">
-                                      <span className="font-medium">
-                                        {formatAnswer(
-                                          subQuestion.human_coder_answer
-                                        )}
-                                      </span>
-                                    </div>
+                                    ) : (
+                                      <div className="text-sm text-gray-500">No human coder answer</div>
+                                    )}
                                   </div>
                                 </div>
-                                {/* Decision UI */}
-                                {!subQuestionDecision &&
-                                  rejectingSubQuestion?.guidelineId !==
-                                    subQuestion.guideline_id &&
-                                  rejectingSubQuestion?.subQuestionIndex !==
-                                    subIndex && (
-                                    <div className="flex gap-2">
-                                      <button
-                                        onClick={(e) => {
-                                          e.stopPropagation();
-                                          handleSubQuestionDecision(
-                                            subQuestion.guideline_id,
-                                            subIndex,
-                                            "accept"
-                                          );
-                                        }}
-                                        disabled={isProcessingSubQuestion}
-                                        className="flex items-center justify-center gap-1 px-3 py-1.5 bg-green-600 text-white text-sm rounded hover:bg-green-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
-                                      >
-                                        {isProcessingSubQuestion ? (
-                                          <RefreshCw className="w-3 h-3 animate-spin" />
-                                        ) : (
-                                          <CheckCircle className="w-3 h-3" />
-                                        )}
-                                        Accept AI Prediction
-                                      </button>
-                                      <button
-                                        onClick={(e) => {
-                                          e.stopPropagation();
-                                          handleSubQuestionDecision(
-                                            subQuestion.guideline_id,
-                                            subIndex,
-                                            "reject"
-                                          );
-                                        }}
-                                        disabled={isProcessingSubQuestion}
-                                        className="flex items-center justify-center gap-1 px-3 py-1.5 bg-red-600 text-white text-sm rounded hover:bg-red-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
-                                      >
-                                        {isProcessingSubQuestion ? (
-                                          <RefreshCw className="w-3 h-3 animate-spin" />
-                                        ) : (
-                                          <XCircle className="w-3 h-3" />
-                                        )}
-                                        Reject AI Prediction
-                                      </button>
-                                    </div>
-                                  )}
-                                {/* Accepted State */}
-                                {subQuestionDecision &&
-                                  subQuestionDecision.action === "accept" && (
-                                    <div className="bg-green-50 border border-green-200 rounded p-3">
-                                      <div className="flex items-center justify-between">
-                                        <div className="flex items-center gap-2">
-                                          <ThumbsUp className="w-4 h-4 text-green-600" />
-                                          <span className="text-green-800 font-medium text-sm">
-                                            User Accepted
-                                          </span>
-                                        </div>
-                                        <button
-                                          onClick={(e) => {
-                                            e.stopPropagation();
-                                            handleSubQuestionDecision(
-                                              subQuestion.guideline_id,
-                                              subIndex,
-                                              "undo"
-                                            );
-                                          }}
-                                          disabled={isProcessingSubQuestion}
-                                          className="text-red-600 hover:text-red-700 flex items-center gap-1 text-sm"
-                                        >
-                                          <X className="w-3 h-3" />
-                                          Remove
-                                        </button>
-                                      </div>
-                                      <p className="text-xs text-green-700 mt-1">
-                                        Reviewed on{" "}
-                                        {new Date(
-                                          subQuestionDecision.timestamp
-                                        ).toLocaleDateString()}
-                                        {subQuestionDecision.submittedBy && (
-                                          <span>
-                                            {" "}
-                                            by {subQuestionDecision.submittedBy}
-                                          </span>
-                                        )}
-                                      </p>
-                                    </div>
-                                  )}
-                                {/* Rejected State */}
-                                {subQuestionDecision &&
-                                  subQuestionDecision.action === "reject" && (
-                                    <div className="bg-red-50 border border-red-200 rounded p-3">
-                                      <div className="flex items-center justify-between">
-                                        <div className="flex items-center gap-2">
-                                          <ThumbsDown className="w-4 h-4 text-red-600" />
-                                          <span className="text-red-800 font-medium text-sm">
-                                            User Rejected
-                                          </span>
-                                        </div>
-                                        <button
-                                          onClick={(e) => {
-                                            e.stopPropagation();
-                                            handleSubQuestionDecision(
-                                              subQuestion.guideline_id,
-                                              subIndex,
-                                              "undo"
-                                            );
-                                          }}
-                                          disabled={isProcessingSubQuestion}
-                                          className="text-red-600 hover:text-red-700 flex items-center gap-1 text-sm"
-                                        >
-                                          <X className="w-3 h-3" />
-                                          Remove
-                                        </button>
-                                      </div>
-                                      <p className="text-xs text-red-700 mt-1">
-                                        Reviewed on{" "}
-                                        {new Date(
-                                          subQuestionDecision.timestamp
-                                        ).toLocaleDateString()}
-                                        {subQuestionDecision.submittedBy && (
-                                          <span>
-                                            {" "}
-                                            by {subQuestionDecision.submittedBy}
-                                          </span>
-                                        )}
-                                      </p>
+                              </div>
 
-                                      {/* Show rejection details if they exist */}
-                                      {subQuestionDecision.userAnswer && (
-                                        <div className="mt-3 space-y-2 bg-white rounded p-3 border border-red-200">
-                                          <div>
-                                            <span className="text-xs font-medium text-gray-700">
-                                              User Answer:
-                                            </span>
-                                            <p className="text-sm text-gray-900">
-                                              {subQuestionDecision.userAnswer}
+                              {/* Action Buttons - MOVED TO TOP */}
+                              <div className="flex items-center gap-3 mb-6">
+                                <button
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    handleGuidelineDecision(subQuestion.guideline_id, 'accept');
+                                  }}
+                                  disabled={processingDecisions.has(subQuestion.guideline_id)}
+                                  className="flex items-center gap-2 px-6 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700 disabled:opacity-50 transition-colors font-medium"
+                                >
+                                  {processingDecisions.has(subQuestion.guideline_id) ? (
+                                    <RefreshCw className="w-4 h-4 animate-spin" />
+                                  ) : (
+                                    <CheckCircle className="w-4 h-4" />
+                                  )}
+                                  Accept AI Prediction
+                                </button>
+                                
+                                <button
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    setShowRejectionModal(subQuestion.guideline_id);
+                                  }}
+                                  disabled={processingDecisions.has(subQuestion.guideline_id)}
+                                  className="flex items-center gap-2 px-6 py-2 bg-red-600 text-white rounded-lg hover:bg-red-700 disabled:opacity-50 transition-colors font-medium"
+                                >
+                                  <X className="w-4 h-4" />
+                                  Reject AI Prediction
+                                </button>
+                                
+                                {subQuestion.user_decision && subQuestion.user_decision !== 'pending' && (
+                                  <button
+                                    onClick={(e) => {
+                                      e.stopPropagation();
+                                      handleGuidelineDecision(subQuestion.guideline_id, 'undo');
+                                    }}
+                                    disabled={processingDecisions.has(subQuestion.guideline_id)}
+                                    className="flex items-center gap-2 px-4 py-2 bg-gray-600 text-white rounded-lg hover:bg-gray-700 disabled:opacity-50 transition-colors"
+                                  >
+                                    <RefreshCw className="w-4 h-4" />
+                                    Undo
+                                  </button>
+                                )}
+                              </div>
+
+                              {/* Available Options */}
+                              {subQuestion.option_descriptions && subQuestion.option_descriptions.length > 0 && (
+                                <div className="mb-6">
+                                  <div 
+                                    className="flex items-center justify-between cursor-pointer group hover:bg-gray-50 p-2 rounded-lg transition-colors"
+                                    onClick={() => toggleSection(`options-${subQuestion.guideline_id}`)}
+                                  >
+                                    <div className="flex items-center gap-2">
+                                      <div className={`transform transition-transform ${expandedSections.has(`options-${subQuestion.guideline_id}`) ? 'rotate-90' : ''}`}>
+                                        <ChevronRight className="w-5 h-5 text-blue-600" />
+                                      </div>
+                                      <h4 className="text-sm font-semibold text-gray-700">Available Options</h4>
+                                      <span className="text-xs bg-blue-100 text-blue-700 px-2 py-1 rounded-full font-medium">
+                                        {subQuestion.option_descriptions.length} options
+                                      </span>
+                                    </div>
+                                    <div className="flex items-center gap-2">
+                                      <Eye className="w-4 h-4 text-blue-600" />
+                                      <span className="text-xs text-blue-600 font-medium group-hover:underline">
+                                        {expandedSections.has(`options-${subQuestion.guideline_id}`) ? 'Hide' : 'View options'}
+                                      </span>
+                                    </div>
+                                  </div>
+                                  {expandedSections.has(`options-${subQuestion.guideline_id}`) && (
+                                    <div className="mt-3 space-y-2 pl-7">
+                                      {subQuestion.option_descriptions.map((option, optionIndex) => (
+                                        <div key={optionIndex} className="text-sm text-gray-700 bg-gray-50 p-3 rounded-lg border border-gray-200">
+                                          <span className="font-medium text-gray-900">{option.option}:</span>
+                                          <span className="ml-1">{option.description}</span>
+                                        </div>
+                                      ))}
+                                    </div>
+                                  )}
+                                </div>
+                              )}
+
+                              {/* Instructions */}
+                              {subQuestion.instructions && (
+                                <div className="mb-6">
+                                  {/* Special Instructions */}
+                                  {subQuestion.instructions.special_instructions && (
+                                    <div className="mb-4">
+                                      <div 
+                                        className="flex items-center justify-between cursor-pointer group hover:bg-yellow-50 p-2 rounded-lg transition-colors"
+                                        onClick={() => toggleSection(`special-${subQuestion.guideline_id}`)}
+                                      >
+                                        <div className="flex items-center gap-2">
+                                          <div className={`transform transition-transform ${expandedSections.has(`special-${subQuestion.guideline_id}`) ? 'rotate-90' : ''}`}>
+                                            <ChevronRight className="w-5 h-5 text-yellow-600" />
+                                          </div>
+                                          <h4 className="text-sm font-semibold text-gray-700">Special Instructions</h4>
+                                          <span className="text-xs bg-yellow-100 text-yellow-700 px-2 py-1 rounded-full font-medium">
+                                            Important
+                                          </span>
+                                        </div>
+                                        <div className="flex items-center gap-2">
+                                          <Eye className="w-4 h-4 text-yellow-600" />
+                                          <span className="text-xs text-yellow-600 font-medium group-hover:underline">
+                                            {expandedSections.has(`special-${subQuestion.guideline_id}`) ? 'Hide' : 'View instructions'}
+                                          </span>
+                                        </div>
+                                      </div>
+                                      {expandedSections.has(`special-${subQuestion.guideline_id}`) && (
+                                        <div className="mt-3 pl-7">
+                                          <div className="bg-yellow-50 border border-yellow-200 rounded-lg p-4">
+                                            <p className="text-sm text-gray-800 leading-relaxed whitespace-pre-wrap">
+                                              {subQuestion.instructions.special_instructions}
                                             </p>
                                           </div>
-
-                                          {subQuestionDecision.supportingEvidence && (
-                                            <div>
-                                              <span className="text-xs font-medium text-gray-700">
-                                                Supporting Evidence:
-                                              </span>
-                                              <p className="text-sm text-gray-900">
-                                                {
-                                                  subQuestionDecision.supportingEvidence
-                                                }
-                                              </p>
-                                            </div>
-                                          )}
-
-                                          {subQuestionDecision.additionalNotes && (
-                                            <div>
-                                              <span className="text-xs font-medium text-gray-700">
-                                                Additional Notes:
-                                              </span>
-                                              <p className="text-sm text-gray-900">
-                                                {
-                                                  subQuestionDecision.additionalNotes
-                                                }
-                                              </p>
-                                            </div>
-                                          )}
                                         </div>
                                       )}
                                     </div>
                                   )}
-                                {/* Reject Form */}
-                                {rejectingSubQuestion?.guidelineId ===
-                                  subQuestion.guideline_id &&
-                                  rejectingSubQuestion?.subQuestionIndex ===
-                                    subIndex && (
-                                    <div className="bg-orange-50 border border-orange-200 rounded p-4">
-                                      <h6 className="text-base font-medium text-orange-800 mb-3">
-                                        Reject AI Prediction
-                                      </h6>
 
-                                      <div className="space-y-3">
-                                        <div>
-                                          <label className="block text-sm font-medium text-gray-700 mb-1">
-                                            Your Answer *
-                                          </label>
-                                          <input
-                                            type="text"
-                                            value={rejectForm.answer}
-                                            onChange={(e) =>
-                                              setRejectForm({
-                                                ...rejectForm,
-                                                answer: e.target.value,
-                                              })
-                                            }
-                                            placeholder="Enter your answer..."
-                                            className="w-full px-3 py-2 border border-gray-300 rounded text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
-                                          />
+                                  {/* Coding Instructions - COLLAPSIBLE */}
+                                  {subQuestion.instructions.coding_instructions && (
+                                    <div className="mb-4">
+                                      <div 
+                                        className="flex items-center justify-between cursor-pointer group hover:bg-orange-50 p-2 rounded-lg transition-colors"
+                                        onClick={() => toggleSection(`coding-${subQuestion.guideline_id}`)}
+                                      >
+                                        <div className="flex items-center gap-2">
+                                          <div className={`transform transition-transform ${expandedSections.has(`coding-${subQuestion.guideline_id}`) ? 'rotate-90' : ''}`}>
+                                            <ChevronRight className="w-5 h-5 text-orange-600" />
+                                          </div>
+                                          <h4 className="text-sm font-semibold text-gray-700">Coding Instructions</h4>
+                                          <span className="text-xs bg-orange-100 text-orange-700 px-2 py-1 rounded-full font-medium">
+                                            Guide
+                                          </span>
                                         </div>
-
-                                        <div>
-                                          <label className="block text-sm font-medium text-gray-700 mb-1">
-                                            Supporting Evidence
-                                          </label>
-                                          <textarea
-                                            value={
-                                              rejectForm.supportingEvidence
-                                            }
-                                            onChange={(e) =>
-                                              setRejectForm({
-                                                ...rejectForm,
-                                                supportingEvidence:
-                                                  e.target.value,
-                                              })
-                                            }
-                                            placeholder="Quote the specific text that supports your answer..."
-                                            className="w-full px-3 py-2 border border-gray-300 rounded text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
-                                          />
-                                        </div>
-
-                                        <div>
-                                          <label className="block text-sm font-medium text-gray-700 mb-1">
-                                            Additional Notes
-                                          </label>
-                                          <textarea
-                                            value={rejectForm.additionalNotes}
-                                            onChange={(e) =>
-                                              setRejectForm({
-                                                ...rejectForm,
-                                                additionalNotes: e.target.value,
-                                              })
-                                            }
-                                            placeholder="Any additional comments or reasoning..."
-                                            className="w-full px-3 py-2 border border-gray-300 rounded text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
-                                          />
-                                        </div>
-
-                                        <div className="flex gap-2">
-                                          <button
-                                            onClick={handleRejectSubmit}
-                                            disabled={
-                                              !rejectForm.answer.trim() ||
-                                              isProcessingSubQuestion
-                                            }
-                                            className="flex items-center gap-1 px-3 py-1.5 bg-orange-600 text-white text-sm rounded hover:bg-orange-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
-                                          >
-                                            {isProcessingSubQuestion ? (
-                                              <RefreshCw className="w-3 h-3 animate-spin" />
-                                            ) : (
-                                              <Save className="w-3 h-3" />
-                                            )}
-                                            Save Review
-                                          </button>
-                                          <button
-                                            onClick={handleRejectCancel}
-                                            className="flex items-center gap-1 px-3 py-1.5 bg-gray-500 text-white text-sm rounded hover:bg-gray-600 transition-colors"
-                                          >
-                                            <X className="w-3 h-3" />
-                                            Cancel
-                                          </button>
+                                        <div className="flex items-center gap-2">
+                                          <Eye className="w-4 h-4 text-orange-600" />
+                                          <span className="text-xs text-orange-600 font-medium group-hover:underline">
+                                            {expandedSections.has(`coding-${subQuestion.guideline_id}`) ? 'Hide' : 'View guide'}
+                                          </span>
                                         </div>
                                       </div>
+                                      {expandedSections.has(`coding-${subQuestion.guideline_id}`) && (
+                                        <div className="mt-3 pl-7">
+                                          <div className="bg-orange-50 border border-orange-200 rounded-lg p-4">
+                                            <p className="text-sm text-gray-800 leading-relaxed whitespace-pre-wrap">
+                                              {subQuestion.instructions.coding_instructions}
+                                            </p>
+                                          </div>
+                                        </div>
+                                      )}
                                     </div>
                                   )}
-                                {/* Supporting Evidence */}
-                                {subQuestion.supporting_info &&
-                                  subQuestion.supporting_info.length > 0 && (
-                                    <div>
-                                      <div className="flex items-center gap-2 mb-2">
-                                        <FileText className="w-4 h-4 text-gray-500" />
-                                        <span className="text-sm font-medium text-gray-700">
-                                          Supporting Evidence
-                                        </span>
-                                        <span className="text-xs text-gray-500">
-                                          ({subQuestion.supporting_info.length}{" "}
-                                          items)
-                                        </span>
+
+                                  {/* Response Specific Instructions */}
+                                  {subQuestion.instructions.response_specific_instructions && (
+                                    <div className="mb-4">
+                                      <div 
+                                        className="flex items-center justify-between cursor-pointer group hover:bg-blue-50 p-2 rounded-lg transition-colors"
+                                        onClick={() => toggleSection(`response-${subQuestion.guideline_id}`)}
+                                      >
+                                        <div className="flex items-center gap-2">
+                                          <div className={`transform transition-transform ${expandedSections.has(`response-${subQuestion.guideline_id}`) ? 'rotate-90' : ''}`}>
+                                            <ChevronRight className="w-5 h-5 text-blue-600" />
+                                          </div>
+                                          <h4 className="text-sm font-semibold text-gray-700">Response Specific Instructions</h4>
+                                          <span className="text-xs bg-blue-100 text-blue-700 px-2 py-1 rounded-full font-medium">
+                                            Guidelines
+                                          </span>
+                                        </div>
+                                        <div className="flex items-center gap-2">
+                                          <Eye className="w-4 h-4 text-blue-600" />
+                                          <span className="text-xs text-blue-600 font-medium group-hover:underline">
+                                            {expandedSections.has(`response-${subQuestion.guideline_id}`) ? 'Hide' : 'View details'}
+                                          </span>
+                                        </div>
                                       </div>
-                                      <div className="space-y-2">
-                                        {subQuestion.supporting_info.map(
-                                          (info, idx) => (
-                                            <div
-                                              key={idx}
-                                              className="bg-gray-50 border-l-4 border-blue-400 rounded-r p-3"
-                                            >
-                                              <p className="text-sm text-gray-700 font-medium mb-2">
-                                                "
-                                                {
-                                                  info.supporting_sentence_in_document
-                                                }
-                                                "
-                                              </p>
-                                              <div className="flex items-center justify-between">
-                                                <div className="flex items-center gap-3 text-xs text-gray-500">
-                                                  <span className="flex items-center gap-1">
-                                                    <FileText className="w-3 h-3" />
-                                                    {info.document_name}
-                                                  </span>
-                                                  <span>
-                                                    Page {info.page_number}
-                                                  </span>
-                                                  <span className="text-blue-600">
-                                                    {info.bbox?.length || 0}{" "}
-                                                    highlight
-                                                    {info.bbox?.length !== 1
-                                                      ? "s"
-                                                      : ""}{" "}
-                                                    available
-                                                  </span>
-                                                </div>
-                                                {info.bbox &&
-                                                  info.bbox.length > 0 && (
-                                                    <button
-                                                      onClick={() =>
-                                                        handleHighlightClick(
-                                                          info
-                                                        )
-                                                      }
-                                                      className="px-2 py-1 bg-blue-600 text-white text-xs font-medium rounded hover:bg-blue-700 transition-colors"
-                                                    >
-                                                      Highlight {idx + 1}
-                                                    </button>
-                                                  )}
-                                              </div>
-                                            </div>
-                                          )
-                                        )}
-                                      </div>
+                                      {expandedSections.has(`response-${subQuestion.guideline_id}`) && (
+                                        <div className="mt-3 pl-7">
+                                          <div className="bg-blue-50 border border-blue-200 rounded-lg p-4">
+                                            <p className="text-sm text-gray-800 leading-relaxed whitespace-pre-wrap">
+                                              {subQuestion.instructions.response_specific_instructions}
+                                            </p>
+                                          </div>
+                                        </div>
+                                      )}
                                     </div>
                                   )}
-                                {/* AI Reasoning */}
-                                {subQuestion.reasoning && (
-                                  <div className="bg-gray-50 rounded p-3">
-                                    <h6 className="text-sm font-medium text-gray-700 mb-1">
-                                      AI Reasoning:
-                                    </h6>
-                                    <p className="text-sm text-gray-600 leading-relaxed">
-                                      {subQuestion.reasoning}
-                                    </p>
+                                </div>
+                              )}
+
+
+                              {/* Supporting Evidence - COLLAPSIBLE */}
+                              {subQuestion.supporting_info && subQuestion.supporting_info.length > 0 && (
+                                <div className="mb-6">
+                                  <div 
+                                    className="flex items-center justify-between cursor-pointer group hover:bg-green-50 p-2 rounded-lg transition-colors"
+                                    onClick={() => toggleSection(`evidence-${subQuestion.guideline_id}`)}
+                                  >
+                                    <div className="flex items-center gap-2">
+                                      <div className={`transform transition-transform ${expandedSections.has(`evidence-${subQuestion.guideline_id}`) ? 'rotate-90' : ''}`}>
+                                        <ChevronRight className="w-5 h-5 text-green-600" />
+                                      </div>
+                                      <FileText className="w-4 h-4 text-gray-600" />
+                                      <h4 className="text-sm font-semibold text-gray-700">Supporting Evidence</h4>
+                                      <span className="text-xs bg-green-100 text-green-700 px-2 py-1 rounded-full font-medium">
+                                        {subQuestion.supporting_info.length} items
+                                      </span>
+                                    </div>
+                                    <div className="flex items-center gap-2">
+                                      <Eye className="w-4 h-4 text-green-600" />
+                                      <span className="text-xs text-green-600 font-medium group-hover:underline">
+                                        {expandedSections.has(`evidence-${subQuestion.guideline_id}`) ? 'Hide' : 'View evidence'}
+                                      </span>
+                                    </div>
                                   </div>
-                                )}
-                              </div>
-                            )}
-                          </div>
-                        );
-                      })}
+                                  {expandedSections.has(`evidence-${subQuestion.guideline_id}`) && (
+                                    <div className="mt-3 space-y-3 pl-7">
+                                      {subQuestion.supporting_info.map((info, infoIndex) => (
+                                      <div key={infoIndex} className="border-l-4 border-blue-400 bg-gray-50 p-4 rounded-r-lg">
+                                        <div className="mb-3">
+                                          <p className="text-sm text-gray-800 font-medium leading-relaxed">
+                                            "{info.supporting_sentence_in_document}"
+                                          </p>
+                                        </div>
+                                        <div className="flex items-center justify-between">
+                                          <div className="flex items-center gap-3 text-xs text-gray-600">
+                                            <div className="flex items-center gap-1">
+                                              <FileText className="w-3 h-3" />
+                                              <span>{info.document_name}</span>
+                                            </div>
+                                            <span>Page {info.page_number}</span>
+                                            {info.highlight_count && (
+                                              <span className="text-blue-600">
+                                                {info.highlight_count} highlight{info.highlight_count !== 1 ? 's' : ''} available
+                                              </span>
+                                            )}
+                                          </div>
+                                          <button
+                                            onClick={(e) => {
+                                              e.stopPropagation();
+                                              onHighlight && onHighlight(info);
+                                            }}
+                                            className="px-3 py-1 bg-blue-600 text-white text-xs rounded-lg hover:bg-blue-700 transition-colors font-medium"
+                                          >
+                                            View
+                                          </button>
+                                        </div>
+                                      </div>
+                                      ))}
+                                    </div>
+                                  )}
+                                </div>
+                              )}
+
+                              {/* AI Reasoning - COLLAPSIBLE */}
+                              {subQuestion.reasoning && (
+                                <div className="mb-6">
+                                  <div 
+                                    className="flex items-center justify-between cursor-pointer group hover:bg-indigo-50 p-2 rounded-lg transition-colors"
+                                    onClick={() => toggleSection(`reasoning-${subQuestion.guideline_id}`)}
+                                  >
+                                    <div className="flex items-center gap-2">
+                                      <div className={`transform transition-transform ${expandedSections.has(`reasoning-${subQuestion.guideline_id}`) ? 'rotate-90' : ''}`}>
+                                        <ChevronRight className="w-5 h-5 text-indigo-600" />
+                                      </div>
+                                      <h4 className="text-sm font-semibold text-gray-700">AI Reasoning</h4>
+                                      <span className="text-xs bg-indigo-100 text-indigo-700 px-2 py-1 rounded-full font-medium">
+                                        Explanation
+                                      </span>
+                                    </div>
+                                    <div className="flex items-center gap-2">
+                                      <Eye className="w-4 h-4 text-indigo-600" />
+                                      <span className="text-xs text-indigo-600 font-medium group-hover:underline">
+                                        {expandedSections.has(`reasoning-${subQuestion.guideline_id}`) ? 'Hide' : 'View reasoning'}
+                                      </span>
+                                    </div>
+                                  </div>
+                                  {expandedSections.has(`reasoning-${subQuestion.guideline_id}`) && (
+                                    <div className="mt-3 pl-7">
+                                      <div className="bg-gray-50 border border-gray-200 rounded-lg p-4">
+                                        <p className="text-sm text-gray-800 leading-relaxed">
+                                          {subQuestion.reasoning}
+                                        </p>
+                                      </div>
+                                    </div>
+                                  )}
+                                </div>
+                              )}
+
+                              {/* Rejection Note - COLLAPSIBLE */}
+                              {subQuestion.rejection_note && (
+                                <div className="mb-6">
+                                  <div 
+                                    className="flex items-center justify-between cursor-pointer group hover:bg-red-50 p-2 rounded-lg transition-colors"
+                                    onClick={() => toggleSection(`rejection-${subQuestion.guideline_id}`)}
+                                  >
+                                    <div className="flex items-center gap-2">
+                                      <div className={`transform transition-transform ${expandedSections.has(`rejection-${subQuestion.guideline_id}`) ? 'rotate-90' : ''}`}>
+                                        <ChevronRight className="w-5 h-5 text-red-600" />
+                                      </div>
+                                      <h4 className="text-sm font-semibold text-gray-700">Rejection Note</h4>
+                                      <span className="text-xs bg-red-100 text-red-700 px-2 py-1 rounded-full font-medium">
+                                        Important
+                                      </span>
+                                    </div>
+                                    <div className="flex items-center gap-2">
+                                      <Eye className="w-4 h-4 text-red-600" />
+                                      <span className="text-xs text-red-600 font-medium group-hover:underline">
+                                        {expandedSections.has(`rejection-${subQuestion.guideline_id}`) ? 'Hide' : 'View note'}
+                                      </span>
+                                    </div>
+                                  </div>
+                                  {expandedSections.has(`rejection-${subQuestion.guideline_id}`) && (
+                                    <div className="mt-3 pl-7">
+                                      <div className="bg-red-50 border border-red-200 rounded-lg p-4">
+                                        <p className="text-sm text-red-800">{subQuestion.rejection_note}</p>
+                                      </div>
+                                    </div>
+                                  )}
+                                </div>
+                              )}
+                            </div>
+                          )}
+                        </React.Fragment>
+                      ))}
                     </div>
                   )}
                 </div>
               );
             })}
-
-            {/* Save Button */}
-            <div className="flex justify-end pt-6 pb-4">
-              <button
-                onClick={handleSaveAll}
-                disabled={isSaving}
-                className={`inline-flex items-center gap-2 px-6 py-3 rounded-lg text-white font-medium transition-all duration-200 ${
-                  isSaving
-                    ? "bg-gray-400 cursor-not-allowed"
-                    : "bg-blue-600 hover:bg-blue-700 hover:shadow-lg transform hover:scale-105"
-                }`}
-              >
-                <Save className={`w-5 h-5 ${isSaving ? "animate-spin" : ""}`} />
-                {isSaving ? "Saving..." : "Save"}
-              </button>
-            </div>
-          </div>
-        ) : (
-          <div className="text-center py-12">
-            <Activity className="w-12 h-12 text-gray-400 mx-auto mb-4" />
-            {guidelines.length === 0 ? (
-              <>
-                <p className="text-lg font-medium text-gray-500">
-                  No results found
-                </p>
-                <p className="text-gray-400">
-                  No guidelines available for this MRN
-                </p>
-              </>
-            ) : (
-              <>
-                <p className="text-lg font-medium text-gray-500">
-                  No guidelines match your criteria
-                </p>
-                <p className="text-gray-400">
-                  Try adjusting your search term or filter selection
-                </p>
-                <button
-                  onClick={() => {
-                    setSearchTerm("");
-                    setFilterType("all");
-                  }}
-                  className="mt-4 px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors"
-                >
-                  Clear Filters
-                </button>
-              </>
-            )}
-            {/* Save Button - only show if there are guidelines */}
-            {guidelines.length > 0 && (
-              <div className="flex justify-end pt-6 pb-4">
-                <button
-                  onClick={handleSaveAll}
-                  disabled={isSaving}
-                  className={`inline-flex items-center gap-2 px-6 py-3 rounded-lg text-white font-medium transition-all duration-200 ${
-                    isSaving
-                      ? "bg-gray-400 cursor-not-allowed"
-                      : "bg-blue-600 hover:bg-blue-700 hover:shadow-lg transform hover:scale-105"
-                  }`}
-                >
-                  <Save
-                    className={`w-5 h-5 ${isSaving ? "animate-spin" : ""}`}
-                  />
-                  {isSaving ? "Saving..." : "Save"}
-                </button>
-              </div>
-            )}
           </div>
         )}
       </div>
 
-      {/* Success Message Toast */}
-      {showSuccessMessage && (
-        <div className="fixed top-4 right-4 bg-green-500 text-white px-6 py-3 rounded-lg shadow-lg flex items-center gap-2 z-50 animate-slide-in">
-          <CheckCircle className="w-5 h-5" />
-          <span className="font-medium">All changes saved successfully!</span>
+      {/* Rejection Note Modal */}
+      {showRejectionModal && (
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
+          <div className="bg-white rounded-lg p-6 w-full max-w-md mx-4">
+            <div className="flex items-center justify-between mb-4">
+              <h3 className="text-lg font-semibold text-gray-900">Add Rejection Note</h3>
+              <button
+                onClick={() => setShowRejectionModal(null)}
+                className="text-gray-400 hover:text-gray-600"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+            
+            <div className="mb-4">
+              <label className="block text-sm font-medium text-gray-700 mb-2">
+                Reason for rejection:
+              </label>
+              <textarea
+                value={rejectionNotes[showRejectionModal] || ''}
+                onChange={(e) => setRejectionNotes(prev => ({
+                  ...prev,
+                  [showRejectionModal]: e.target.value
+                }))}
+                className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none"
+                rows={4}
+                placeholder="Please provide a reason for rejecting this guideline..."
+              />
+            </div>
+            
+            <div className="flex items-center gap-3">
+              <button
+                onClick={() => {
+                  const note = rejectionNotes[showRejectionModal]?.trim();
+                  if (note) {
+                    handleRejectionNoteSubmit(showRejectionModal, note);
+                  }
+                }}
+                disabled={!rejectionNotes[showRejectionModal]?.trim()}
+                className="flex items-center gap-2 px-4 py-2 bg-red-600 text-white rounded-lg hover:bg-red-700 disabled:opacity-50 transition-colors"
+              >
+                <MessageSquare className="w-4 h-4" />
+                Submit Rejection
+              </button>
+              
+              <button
+                onClick={() => setShowRejectionModal(null)}
+                className="px-4 py-2 bg-gray-300 text-gray-700 rounded-lg hover:bg-gray-400 transition-colors"
+              >
+                Cancel
+              </button>
+            </div>
+          </div>
         </div>
       )}
     </div>

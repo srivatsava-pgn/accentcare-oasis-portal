@@ -1,0 +1,3 @@
+[submodule "src/lib/pdf-viewer"]
+	path = src/lib/pdf-viewer
+	url = https://github.com/Penguin-AI-Corp/data-labelling-library.git

@@ -1,14 +1,21 @@
 import { AlertCircle, FileText, RefreshCw } from "lucide-react";
 import { useEffect, useState } from "react";
-// Import your PDF viewer library here
-import PDFViewer from "../lib/pdf-viewer  ";
-import { getDocumentByMrn, searchDocumentByMrn } from "../services/api";
+// Import the advanced PDF viewer with NER support
+import AdvancedPDFViewer from "./AdvancedPDFViewer";
+import { getDocumentByEpisodeId, searchDocumentByEpisodeId } from "../services/api";
 
-const PDFViewerSection = ({ mrn, boundingBoxes = null }) => {
+const PDFViewerSection = ({ 
+  episodeId, 
+  boundingBoxes = null, 
+  highlightedDocumentName = null, 
+  highlightedPageNumber = null 
+}) => {
   const [documentData, setDocumentData] = useState(null);
   const [searchResults, setSearchResults] = useState(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
+  const [selectedDocument, setSelectedDocument] = useState('');
+  const [currentPage, setCurrentPage] = useState(1);
 
   useEffect(() => {
     const fetchDocumentData = async () => {
@@ -16,7 +23,7 @@ const PDFViewerSection = ({ mrn, boundingBoxes = null }) => {
         setLoading(true);
         setError(null);
 
-        const data = await getDocumentByMrn(mrn);
+        const data = await getDocumentByEpisodeId(episodeId);
         setDocumentData(data);
       } catch (error) {
         setError(error.message);
@@ -25,22 +32,49 @@ const PDFViewerSection = ({ mrn, boundingBoxes = null }) => {
       }
     };
 
-    if (mrn) {
+    if (episodeId) {
       fetchDocumentData();
     }
-  }, [mrn]);
+  }, [episodeId]);
+
+  // Handle navigation when highlight is clicked
+  useEffect(() => {
+    if (highlightedDocumentName && highlightedPageNumber && documentData) {
+      // Check if the highlighted document exists in our data
+      const targetDoc = documentData.documents.find(doc => doc.document_name === highlightedDocumentName);
+      if (targetDoc) {
+        setSelectedDocument(highlightedDocumentName);
+        setCurrentPage(highlightedPageNumber);
+      }
+    }
+  }, [highlightedDocumentName, highlightedPageNumber, documentData]);
 
   const handleRetry = () => {
     setError(null);
-    // fetchDocumentData();
+    // Re-fetch document data on retry
+    if (episodeId) {
+      const fetchDocumentData = async () => {
+        try {
+          setLoading(true);
+          setError(null);
+          const data = await getDocumentByEpisodeId(episodeId);
+          setDocumentData(data);
+        } catch (error) {
+          setError(error.message);
+        } finally {
+          setLoading(false);
+        }
+      };
+      fetchDocumentData();
+    }
   };
 
   const handleDocumentChange = (documentName) => {
-    console.log("Document changed:", documentName);
+    setSelectedDocument(documentName);
   };
 
   const handlePageChange = (pageNumber) => {
-    console.log("Page changed:", pageNumber);
+    setCurrentPage(pageNumber);
   };
 
   const handleAnnotationAdd = (annotation) => {
@@ -57,12 +91,12 @@ const PDFViewerSection = ({ mrn, boundingBoxes = null }) => {
     }
 
     try {
-      const searchData = await searchDocumentByMrn(mrn, searchQuery.trim());
+      const searchData = await searchDocumentByEpisodeId(episodeId, searchQuery.trim());
 
-      setSearchResults(searchData || {});
+      setSearchResults(searchData || { matches: [] });
     } catch (error) {
       console.error("Search failed:", error);
-      setSearchResults({});
+      setSearchResults({ matches: [] });
       // Optionally show an error message to the user
       // setError(`Search failed: ${error.message}`);
     }
@@ -77,7 +111,7 @@ const PDFViewerSection = ({ mrn, boundingBoxes = null }) => {
             Loading PDF Documents...
           </p>
           <p className="text-sm text-gray-500 mt-2">
-            Fetching files for MRN: {mrn}
+            Fetching files for Episode ID: {episodeId}
           </p>
         </div>
       </div>
@@ -106,14 +140,16 @@ const PDFViewerSection = ({ mrn, boundingBoxes = null }) => {
 
   return (
     <div className="h-full flex flex-col">
-      {/* PDF Viewer Content */}
+      {/* Advanced PDF Viewer Content with NER Support */}
       <div className="flex-1 overflow-hidden">
         {documentData ? (
-          <PDFViewer
+          <AdvancedPDFViewer
             documentData={documentData}
             boundingBoxes={boundingBoxes}
             searchResults={searchResults}
-            userInterfaces={{}}
+            viewMode="pdf"
+            selectedDocument={selectedDocument}
+            currentPage={currentPage}
             onDocumentChange={handleDocumentChange}
             onPageChange={handlePageChange}
             onAnnotationAdd={handleAnnotationAdd}
@@ -128,7 +164,7 @@ const PDFViewerSection = ({ mrn, boundingBoxes = null }) => {
                 No documents available
               </p>
               <p className="text-sm text-gray-400">
-                No PDF files found for MRN: {mrn}
+                No PDF files found for Episode ID: {episodeId}
               </p>
             </div>
           </div>

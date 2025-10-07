@@ -21,8 +21,10 @@ import PenguinLogo from "../assets/penguin-logo.svg";
 import Penguin from "../assets/Penguinai-name.png";
 import {
   getDashboardStats,
-  getOasisProjects,
-  searchOasisProjects,
+  fetchOasisProjects,
+  searchEpisodeProjects,
+  getStatusLabel,
+  normalizeStatus,
 } from "../services/api";
 import CodingInterface from "./CodingInterface";
 
@@ -33,7 +35,6 @@ const Dashboard = ({ handleLogout }) => {
   const [statsLoading, setStatsLoading] = useState(true);
   const [error, setError] = useState(null);
   const [statsError, setStatsError] = useState(null);
-  const [selectedMRN, setSelectedMRN] = useState(null);
   const [selectedEpisodeId, setSelectedEpisodeId] = useState(null);
   const [currentPage, setCurrentPage] = useState(1);
   const [pagination, setPagination] = useState({});
@@ -52,21 +53,24 @@ const Dashboard = ({ handleLogout }) => {
 
   // Status options
   const statusOptions = [
-    { value: "", label: "All Status" },
+    { value: "ALL", label: "All Status" },
+    { value: "STARTED", label: "Started" },
+    { value: "PROCESSING", label: "Processing" },
+    { value: "COMPLETED", label: "Ready for Review" },
     { value: "IN REVIEW", label: "In Review" },
-    { value: "YET TO START", label: "Yet to Review" },
-    { value: "COMPLETED", label: "Completed" },
+    { value: "REVIEWED", label: "Reviewed & Locked" },
+    { value: "FAILED", label: "Failed" },
   ];
 
   const handleSearch = async () => {
     try {
       setIsSearching(true);
       setError(null);
-      const results = await searchOasisProjects(searchTerm.trim());
+      const results = await searchEpisodeProjects(searchTerm.trim());
       setSearchResults(results);
       setShowingSearchResults(true);
     } catch (error) {
-      setError(error.message || "Failed to search projects");
+      setError(error.message || "Failed to search episodes");
       setSearchResults([]);
     } finally {
       setIsSearching(false);
@@ -82,19 +86,19 @@ const Dashboard = ({ handleLogout }) => {
 
   const fetchProjects = async (
     pageNum = currentPage,
-    status = selectedStatus
+    status = selectedStatus || "ALL"
   ) => {
     try {
       setLoading(true);
       setError(null);
 
-      const data = await getOasisProjects(pageNum, entriesPerPage, status);
+      const data = await fetchOasisProjects(pageNum, entriesPerPage, status);
       setProjects(data.projects || []);
       setPagination(data.pagination || {});
       setCurrentPage(pageNum);
     } catch (err) {
-      console.error("Error fetching projects:", err);
-      setError(err.message || "Failed to fetch projects");
+      console.error("Error fetching episodes:", err);
+      setError(err.message || "Failed to fetch episodes");
       setProjects([]);
     } finally {
       setLoading(false);
@@ -111,6 +115,8 @@ const Dashboard = ({ handleLogout }) => {
         total_projects: statsData.total_projects || 0,
         total_completed: statsData.completed || 0,
         total_accuracy: statsData.accuracy_rate || 0,
+        processing: statsData.processing || 0,
+        failed: statsData.failed || 0,
       });
     } catch (err) {
       console.error("Error fetching dashboard stats:", err);
@@ -119,6 +125,8 @@ const Dashboard = ({ handleLogout }) => {
         total_projects: 0,
         total_completed: 0,
         total_accuracy: 0,
+        processing: 0,
+        failed: 0,
       });
     } finally {
       setStatsLoading(false);
@@ -130,13 +138,11 @@ const Dashboard = ({ handleLogout }) => {
     fetchDashboardStats();
   }, []);
 
-  const handleStartCoding = (mrn, episodeId) => {
-    setSelectedMRN(mrn);
+  const handleStartCoding = (episodeId) => {
     setSelectedEpisodeId(episodeId);
   };
 
   const handleBackToDashboard = () => {
-    setSelectedMRN(null);
     setSelectedEpisodeId(null);
     // Force refetch of data
     fetchProjects();
@@ -153,7 +159,7 @@ const Dashboard = ({ handleLogout }) => {
     if (showingSearchResults) {
       clearSearch();
     }
-    fetchProjects(1, selectedStatus);
+    fetchProjects(1, selectedStatus || "ALL");
     fetchDashboardStats();
     setCurrentPage(1);
   };
@@ -164,10 +170,9 @@ const Dashboard = ({ handleLogout }) => {
     fetchProjects(1, status);
   };
 
-  if (selectedMRN) {
+  if (selectedEpisodeId) {
     return (
       <CodingInterface
-        mrn={selectedMRN}
         episodeId={selectedEpisodeId}
         onBack={handleBackToDashboard}
         handleLogout={handleLogout}
@@ -225,7 +230,7 @@ const Dashboard = ({ handleLogout }) => {
                   {error && statsError
                     ? "API Error - Using fallback data"
                     : error
-                    ? "Projects API Error"
+                    ? "Episodes API Error"
                     : "Stats API Error"}
                 </span>
                 <button
@@ -454,7 +459,7 @@ const Dashboard = ({ handleLogout }) => {
                 className="text-sm font-medium text-gray-700"
                 style={{ fontSize: "12px" }}
               >
-                Questions Processed
+                Guidelines Total
               </span>
             </div>
             <div className="flex items-center gap-3">
@@ -642,25 +647,39 @@ const Dashboard = ({ handleLogout }) => {
                           </td>
                           <td className="px-6 py-4 whitespace-nowrap">
                             <div className="flex items-center gap-2">
-                              {episode.status === "COMPLETED" ? (
+                              {normalizeStatus(episode.status) === "completed" || normalizeStatus(episode.status) === "reviewed" ? (
                                 <>
                                   <CheckCircle className="w-4 h-4 text-green-600" />
                                   <span className="inline-flex px-2 py-1 text-xs font-bold rounded-full bg-green-100 text-green-800">
-                                    COMPLETED
+                                    {getStatusLabel(episode.status)}
                                   </span>
                                 </>
-                              ) : episode.status === "YET TO START" ? (
+                              ) : normalizeStatus(episode.status) === "started" ? (
                                 <>
                                   <Clock className="w-4 h-4 text-gray-600" />
                                   <span className="inline-flex px-2 py-1 text-xs font-bold rounded-full bg-gray-100 text-gray-800">
-                                    YET TO REVIEW
+                                    {getStatusLabel(episode.status)}
+                                  </span>
+                                </>
+                              ) : normalizeStatus(episode.status) === "processing" ? (
+                                <>
+                                  <RefreshCw className="w-4 h-4 text-blue-600 animate-spin" />
+                                  <span className="inline-flex px-2 py-1 text-xs font-bold rounded-full bg-blue-100 text-blue-800">
+                                    {getStatusLabel(episode.status)}
+                                  </span>
+                                </>
+                              ) : normalizeStatus(episode.status) === "failed" ? (
+                                <>
+                                  <AlertCircle className="w-4 h-4 text-red-600" />
+                                  <span className="inline-flex px-2 py-1 text-xs font-bold rounded-full bg-red-100 text-red-800">
+                                    {getStatusLabel(episode.status)}
                                   </span>
                                 </>
                               ) : (
                                 <>
                                   <Clock className="w-4 h-4 text-yellow-600" />
                                   <span className="inline-flex px-2 py-1 text-xs font-bold rounded-full bg-yellow-100 text-yellow-800">
-                                    {episode.status}
+                                    {getStatusLabel(episode.status)}
                                   </span>
                                 </>
                               )}
@@ -673,7 +692,7 @@ const Dashboard = ({ handleLogout }) => {
                               <div className="flex items-center gap-1 min-w-[30px]">
                                 <div className="w-2 h-2 bg-blue-500 rounded-full"></div>
                                 <span className="text-sm font-bold text-blue-600">
-                                  {episode.questions_processed || 0}
+                                  {episode.guidelines_total || 0}
                                 </span>
                               </div>
 
@@ -735,7 +754,7 @@ const Dashboard = ({ handleLogout }) => {
                           <td className="px-6 py-4 whitespace-nowrap">
                             <div className="flex items-center gap-2">
                               <div className="text-sm font-semibold text-gray-900">
-                                {episode.accuracy && `${episode.accuracy}%`}
+                                {episode.accuracy !== null && episode.accuracy !== undefined ? `${episode.accuracy}%` : 'N/A'}
                               </div>
                             </div>
                           </td>
@@ -743,15 +762,13 @@ const Dashboard = ({ handleLogout }) => {
                           <td className="px-6 py-4 whitespace-nowrap">
                             <button
                               onClick={() =>
-                                handleStartCoding(
-                                  episode.mrn,
-                                  episode.episode_id
-                                )
+                                handleStartCoding(episode.episode_id)
                               }
-                              className="inline-flex items-center gap-2 px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors font-semibold text-sm"
+                              disabled={normalizeStatus(episode.status) === "started" || normalizeStatus(episode.status) === "processing"}
+                              className="inline-flex items-center gap-2 px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors font-semibold text-sm"
                             >
                               <Eye className="w-4 h-4" />
-                              View Results
+                              {normalizeStatus(episode.status) === "processing" ? "Processing..." : "View Results"}
                             </button>
                           </td>
                         </tr>
@@ -847,7 +864,7 @@ const Dashboard = ({ handleLogout }) => {
             <p className="text-lg font-medium text-gray-500">
               {showingSearchResults
                 ? "No episodes found for your search"
-                : "No projects found"}
+                : "No episodes found"}
             </p>
             <p className="text-gray-400">
               {showingSearchResults
